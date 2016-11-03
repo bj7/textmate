@@ -16,43 +16,6 @@
 
 namespace ng
 {
-	static std::map<oak::uuid_t, editor_ptr>& editors ()
-	{
-		static std::map<oak::uuid_t, editor_ptr> editors;
-		return editors;
-	}
-
-	editor_ptr editor_for_document (document::document_ptr document)
-	{
-		static struct document_close_callback_t : document::document_t::callback_t
-		{
-			WATCH_LEAKS(document_close_callback_t);
-			document_close_callback_t () { }
-			void handle_document_event (document::document_ptr document, event_t event)
-			{
-				if(event == did_change_open_status && !document->is_open())
-				{
-					document->remove_callback(this);
-					editors().erase(document->identifier());
-				}
-				else if(event == did_change_content)
-				{
-					for(auto pair : editors())
-						pair.second->sanitize_selection();
-				}
-			}
-
-		} callback;
-
-		std::map<oak::uuid_t, editor_ptr>::iterator editor = editors().find(document->identifier());
-		if(editor == editors().end())
-		{
-			document->add_callback(&callback);
-			editor = editors().emplace(document->identifier(), std::make_shared<editor_t>(document)).first;
-		}
-		return editor->second;
-	}
-
 	static std::string sanitized_utf8 (std::string str)
 	{
 		str.erase(utf8::remove_malformed(str.begin(), str.end()), str.end());
@@ -190,7 +153,7 @@ namespace ng
 			return sel;
 		}
 
-		void will_replace (size_t from, size_t to, std::string const& str)
+		void will_replace (size_t from, size_t to, char const* buf, size_t len)
 		{
 			for(auto& mark : _marks)
 			{
@@ -199,19 +162,19 @@ namespace ng
 				{
 					if(mark.type == mark_t::kUnpairedMark || index != from && index != to)
 					{
-						index = from + str.size() - std::min(to - index, str.size());
+						index = from + len - std::min(to - index, len);
 					}
 					else
 					{
 						index = from;
 						if(mark.type == mark_t::kEndMark)
-							index += str.size();
+							index += len;
 					}
 				}
 				else if(from < index)
 				{
 					ASSERT_LT(to, index);
-					index = index + str.size() - (to - from);
+					index = index + len - (to - from);
 				}
 			}
 		}
@@ -322,12 +285,6 @@ namespace ng
 		setup();
 	}
 
-	editor_t::editor_t (document::document_ptr document) : _buffer(document->buffer()), _document(document)
-	{
-		ASSERT(document->is_open());
-		setup();
-	}
-
 	void editor_t::sanitize_selection ()
 	{
 		_selections = ng::sanitize(_buffer, _selections);
@@ -342,6 +299,11 @@ namespace ng
 			if(fragments > 1)      _options["fragments"] = std::to_string(fragments);
 			if(columnar)           _options["columnar"]  = "1";
 		}
+
+		my_clipboard_entry_t (std::string const& content, std::map<std::string, std::string> const& options = { }) : clipboard_t::entry_t(content), _options(options)
+		{
+		}
+
 		std::map<std::string, std::string> const& options () const { return _options; }
 	private:
 		std::map<std::string, std::string> _options;
@@ -427,7 +389,7 @@ namespace ng
 					});
 					dispatch_group_async(group, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
 						if(waitpid(process.pid, &status, 0) != process.pid)
-							perror("waitpid");
+							perror("editor_t::snippet: waitpid");
 					});
 					dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
 					dispatch_release(group);
@@ -501,7 +463,7 @@ namespace ng
 
 		std::string const& indent = options["indent"];
 		bool const complete       = options["complete"] == "1";
-		size_t const fragments    = strtol(options["fragments"].c_str(), NULL, 10);
+		size_t const fragments    = strtol(options["fragments"].c_str(), nullptr, 10);
 		bool const columnar       = options["columnar"] == "1";
 
 		if((selections.size() != 1 || selections.last().columnar) && (fragments > 1 || oak::contains(str.begin(), str.end(), '\n')))
@@ -519,7 +481,7 @@ namespace ng
 
 		if(fragments > 1 && selections.size() == 1)
 		{
-			ASSERT(fragments == std::count(str.begin(), str.end(), '\n') + 1);
+			ASSERT_EQ(fragments, std::count(str.begin(), str.end(), '\n') + 1);
 			if(columnar)
 			{
 				index_t caret = dissect_columnar(buffer, selections).last().min();
@@ -648,7 +610,7 @@ namespace ng
 			_buffer.add_callback(this);
 		}
 
-		void will_replace (size_t from, size_t to, std::string const& str)
+		void will_replace (size_t from, size_t to, char const* buf, size_t len)
 		{
 			text::pos_t pos = _buffer.convert(from);
 
@@ -788,7 +750,7 @@ namespace ng
 			if(!range.empty())
 				sel.push_back(range);
 		}
-		_selections = tmp.empty() ? tmp : sel;
+		_selections = sel.empty() ? tmp : sel;
 	}
 
 	void editor_t::snippet (std::string const& str, std::map<std::string, std::string> const& variables, bool disableIndent)
@@ -798,7 +760,7 @@ namespace ng
 		_selections = this->snippet(from, to, str, variables, disableIndent);
 	}
 
-	void editor_t::perform (action_t action, layout_t const* layout, indent_correction_t indentCorrections, std::string const& scopeAttributes)
+	void editor_t::perform (action_t action, layout_movement_t const* layout, indent_correction_t indentCorrections, std::string const& scopeAttributes)
 	{
 		static std::string const kSingleMarkType = "•";
 		preserve_selection_helper_t selectionHelper(_buffer, _selections);
@@ -1052,7 +1014,30 @@ namespace ng
 
 			case kCut:                                          clipboard()->push_back(copy(_buffer, _selections)); _selections = apply(_buffer, _selections, _snippets, &transform::null); break;
 			case kCopy:                                         clipboard()->push_back(copy(_buffer, _selections));                                                                         break;
-			case kCopySelectionToFindPboard:                    find_clipboard()->push_back(copy(_buffer, dissect_columnar(_buffer, _selections).first()));                                                                    break;
+
+			case kCopySelectionToFindPboard:
+			{
+				std::set<std::string> set;
+				for(auto const& range : dissect_columnar(_buffer, _selections))
+				{
+					if(!range.empty())
+						set.insert(_buffer.substr(range.min().index, range.max().index));
+				}
+
+				if(set.size() > 1)
+				{
+					std::string regexp;
+					for(std::string const& str : set)
+						regexp.append("|" + regexp::escape(str));
+					find_clipboard()->push_back(std::make_shared<my_clipboard_entry_t>(regexp.substr(1), std::map<std::string, std::string>{ { "regularExpression", "1" } }));
+				}
+				else if(!set.empty())
+				{
+					find_clipboard()->push_back(std::make_shared<my_clipboard_entry_t>(*set.begin()));
+				}
+			}
+			break;
+
 			case kCopySelectionToReplacePboard:                 replace_clipboard()->push_back(copy(_buffer, dissect_columnar(_buffer, _selections).first()));                                                                 break;
 			case kPaste:                                        _selections = paste(_buffer, _selections, _snippets, clipboard()->current());                                               break;
 			case kPastePrevious:                                _selections = paste(_buffer, _selections, _snippets, clipboard()->previous());                                              break;
@@ -1339,7 +1324,7 @@ namespace ng
 		_selections = this->replace(replacements, true);
 	}
 
-	bool editor_t::handle_result (std::string const& uncheckedOut, output::type placement, output_format::type format, output_caret::type outputCaret, ng::ranges_t const& inputRanges, std::map<std::string, std::string> environment)
+	bool editor_t::handle_result (std::string const& uncheckedOut, output::type placement, output_format::type format, output_caret::type outputCaret, ng::ranges_t const& inputRanges, std::map<std::string, std::string> const& environment)
 	{
 		std::string const& out = utf8::is_valid(uncheckedOut.begin(), uncheckedOut.end()) ? uncheckedOut : sanitized_utf8(uncheckedOut);
 		ng::range_t inputRange = inputRanges ? inputRanges.last() : ng::range_t();

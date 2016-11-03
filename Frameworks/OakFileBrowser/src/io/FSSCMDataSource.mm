@@ -94,8 +94,8 @@ static NSArray* convert (std::map<std::string, scm::status::type> const& pathsMa
 	{
 		std::string root = scm::root_for_path([aPath fileSystemRepresentation]);
 		if(root != NULL_STR)
-			url = [NSURL URLWithString:[NSString stringWithCxxString:"scm://localhost" + encode::url_part(root, "/") + "/"]];
-		else	url = [NSURL URLWithString:[@"scm://locahost" stringByAppendingString:[aPath stringByAppendingString:@"?status=unversioned"]]];
+				url = [NSURL URLWithString:[NSString stringWithCxxString:"scm://localhost" + encode::url_part(root, "/") + "/"]];
+		else	url = [NSURL URLWithString:[@"scm://locahost" stringByAppendingString:[[aPath stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding] stringByAppendingString:@"?status=unversioned"]]];
 	}
 	else
 	{
@@ -111,7 +111,7 @@ static NSArray* convert (std::map<std::string, scm::status::type> const& pathsMa
 		_url     = anURL;
 		_options = someOptions;
 		_scmInfo = scm::info([[anURL path] fileSystemRepresentation]);
-		_items   = [NSMapTable mapTableWithKeyOptions:NSPointerFunctionsStrongMemory valueOptions:NSPointerFunctionsZeroingWeakMemory];
+		_items   = [NSMapTable strongToWeakObjectsMapTable];
 
 		NSArray* query = [[anURL query] componentsSeparatedByString:@"="];
 		self.rootItem = [self itemOfType:[query lastObject] ?: @"all"];

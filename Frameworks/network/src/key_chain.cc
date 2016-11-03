@@ -20,7 +20,7 @@ key_chain_t::key_t::~key_t ()
 
 void key_chain_t::key_t::init () const
 {
-	_sec_key = NULL;
+	_sec_key = nullptr;
 }
 
 bool key_chain_t::key_t::setup () const
@@ -30,17 +30,17 @@ bool key_chain_t::key_t::setup () const
 
 	bool res = false;
 
-	SecItemImportExportKeyParameters params = { .keyUsage = NULL, .keyAttributes = NULL };
+	SecItemImportExportKeyParameters params = { .keyUsage = nullptr, .keyAttributes = nullptr };
 	SecExternalItemType type = kSecItemTypePublicKey;
 	SecExternalFormat format = kSecFormatPEMSequence;
 
-	CFDataRef data = CFDataCreateWithBytesNoCopy(NULL, (const UInt8*)_key_data.data(), _key_data.size(), kCFAllocatorNull);
-	CFArrayRef items = NULL;
-	OSStatus err = SecItemImport(data, NULL, &format, &type, 0, &params, NULL, &items);
+	CFDataRef data = CFDataCreateWithBytesNoCopy(kCFAllocatorDefault, (const UInt8*)_key_data.data(), _key_data.size(), kCFAllocatorNull);
+	CFArrayRef items = nullptr;
+	OSStatus err = SecItemImport(data, nullptr, &format, &type, 0, &params, nullptr, &items);
 	if(err == errSecSuccess)
 	{
 		_sec_key = (SecKeyRef)CFArrayGetValueAtIndex(items, 0);
-		if(_sec_key != NULL)
+		if(_sec_key != nullptr)
 		{
 			CFRetain(_sec_key);
 			res = true;
@@ -49,7 +49,7 @@ bool key_chain_t::key_t::setup () const
 	}
 	else
 	{
-		CFStringRef message = SecCopyErrorMessageString(err, NULL);
+		CFStringRef message = SecCopyErrorMessageString(err, nullptr);
 		fprintf(stderr, "*** error importing key: %s\n", cf::to_s(message).c_str());
 		CFRelease(message);
 	}
@@ -70,49 +70,6 @@ void key_chain_t::key_t::cleanup () const
 // =============
 // = Key Chain =
 // =============
-
-void key_chain_t::load (std::string const& path)
-{
-	keys.clear();
-
-	plist::dictionary_t identities;
-	if(plist::get_key_path(plist::load(path), "identities", identities))
-	{
-		for(auto const& identity : identities)
-		{
-			std::string name, keyData;
-			if(plist::get_key_path(identity.second, "name", name) && plist::get_key_path(identity.second, "key", keyData))
-			{
-				keys.push_back(std::make_shared<key_t>(identity.first, name, keyData));
-			}
-			else
-			{
-				fprintf(stderr, "no name/key in entry:\n%s", to_s(identity.second).c_str());
-			}
-		}
-	}
-	else
-	{
-		fprintf(stderr, "no identities in ‘%s’\n", path.c_str());
-	}
-}
-
-void key_chain_t::save (std::string const& path) const
-{
-	plist::dictionary_t identities;
-	for(auto const& key : keys)
-	{
-		plist::dictionary_t entry;
-		entry.emplace("name", key->name());
-		entry.emplace("key",  key->_key_data);
-		identities.emplace(key->identity(), entry);
-	}
-
-	plist::dictionary_t plist;
-	plist.emplace("identities", identities);
-
-	plist::save(path, plist);
-}
 
 void key_chain_t::add (key_t const& key)
 {

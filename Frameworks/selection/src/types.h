@@ -25,14 +25,14 @@ namespace ng
 	struct PUBLIC range_t
 	{
 		range_t () : columnar(false), freehanded(false), unanchored(false) { }
-		range_t (index_t first, index_t last = index_t(), bool columnar = false, bool freehanded = false, bool unanchored = false, bool color = false) : first(first), last(last ?: first), columnar(columnar), freehanded(last ? freehanded : first.carry != 0), unanchored(unanchored), color(color) { }
+		range_t (index_t const& first, index_t const& last = index_t(), bool columnar = false, bool freehanded = false, bool unanchored = false, bool color = false) : first(first), last(last ?: first), columnar(columnar), freehanded(last ? freehanded : first.carry != 0), unanchored(unanchored), color(color) { }
 
 		index_t& min ()                            { return first < last ? first : last;  }
 		index_t& max ()                            { return first < last ? last  : first; }
 		index_t const& min () const                { return first < last ? first : last;  }
 		index_t const& max () const                { return first < last ? last  : first; }
 		range_t sorted () const                    { return range_t(min(), max(), columnar, freehanded, unanchored, color); }
-		bool empty () const                        { return freehanded ? first == last : first.index == last.index; }
+		bool empty () const                        { return !last || (freehanded ? first == last : first.index == last.index); }
 		explicit operator bool () const            { return first ? true : false; }
 		bool operator== (range_t const& tmp) const { auto lhs = normalized(), rhs = tmp.normalized(); return lhs.first == rhs.first && lhs.last == rhs.last && lhs.columnar == rhs.columnar && lhs.freehanded == rhs.freehanded; }
 		bool operator!= (range_t const& tmp) const { auto lhs = normalized(), rhs = tmp.normalized(); return lhs.first != rhs.first || lhs.last != rhs.last || lhs.columnar != rhs.columnar || lhs.freehanded != rhs.freehanded; }

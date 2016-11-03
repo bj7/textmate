@@ -13,12 +13,9 @@
 #import <scope/scope.h>
 #import <settings/settings.h>
 #import <theme/theme.h>
-#import <OakAppKit/NSColor Additions.h>
 #import <OakFoundation/NSString Additions.h>
 
 OAK_EXTERN_C_BEGIN
-
-static std::string const kMacClassicThemeUUID = "71D40D9D-AE48-11D9-920A-000D93589AF6";
 
 static void initialize (CFBundleRef generatorBundle)
 {
@@ -126,10 +123,11 @@ static NSAttributedString* create_attributed_string (ng::buffer_t& buffer, std::
 		size_t to = ++pair != scopes.end() ? pair->first : buffer.size();
 
 		[output appendAttributedString:[[NSAttributedString alloc] initWithString:[NSString stringWithCxxString:buffer.substr(from, to)] attributes:@{
-			NSForegroundColorAttributeName : [NSColor tmColorWithCGColor:styles.foreground()],
-			NSBackgroundColorAttributeName : [NSColor tmColorWithCGColor:styles.background()],
-			NSFontAttributeName            : (__bridge NSFont*)styles.font(),
-			NSUnderlineStyleAttributeName  : @(styles.underlined() ? NSUnderlineStyleSingle : NSUnderlineStyleNone),
+			NSForegroundColorAttributeName    : [NSColor colorWithCGColor:styles.foreground()],
+			NSBackgroundColorAttributeName    : [NSColor colorWithCGColor:styles.background()],
+			NSFontAttributeName               : (__bridge NSFont*)styles.font(),
+			NSUnderlineStyleAttributeName     : @(styles.underlined() ? NSUnderlineStyleSingle : NSUnderlineStyleNone),
+			NSStrikethroughStyleAttributeName : @(styles.strikethrough() ? NSUnderlineStyleSingle : NSUnderlineStyleNone),
 		}]];
 
 		from = to;
@@ -210,7 +208,8 @@ OSStatus TextMateQuickLookPlugIn_GeneratePreviewForURL (void* instance, QLPrevie
 
 	settings_t const settings = settings_for_path(URLtoString(url), fileType);
 	theme_ptr theme;
-	NSAttributedString* output = create_attributed_string(buffer, settings.get(kSettingsThemeKey, NULL_STR), settings.get(kSettingsFontNameKey, NULL_STR), settings.get(kSettingsFontSizeKey, 11), &theme);
+	NSFont* font = [NSFont userFixedPitchFontOfSize:0];
+	NSAttributedString* output = create_attributed_string(buffer, settings.get(kSettingsThemeKey, NULL_STR), settings.get(kSettingsFontNameKey, to_s([font fontName])), settings.get(kSettingsFontSizeKey, [font pointSize]), &theme);
 	if(!output)
 	{
 		NSData* data = [NSData dataWithContentsOfURL:(__bridge NSURL*)url];
@@ -224,7 +223,7 @@ OSStatus TextMateQuickLookPlugIn_GeneratePreviewForURL (void* instance, QLPrevie
 
 	NSData* outputData = [output RTFFromRange:NSMakeRange(0, [output length]) documentAttributes:@{
 		NSDocumentTypeDocumentAttribute : [NSString stringWithCxxString:fileType],
-		NSBackgroundColorDocumentAttribute : theme ? [NSColor tmColorWithCGColor:theme->background(fileType)] : [NSColor whiteColor],
+		NSBackgroundColorDocumentAttribute : theme ? [NSColor colorWithCGColor:theme->background(fileType)] : [NSColor whiteColor],
 	}];
 
 	QLPreviewRequestSetDataRepresentation(request, (__bridge CFDataRef)outputData, kUTTypeRTF, nil);

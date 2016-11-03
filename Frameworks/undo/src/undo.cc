@@ -12,8 +12,9 @@ namespace ng
 		_buffer.remove_callback(&_buffer_callback);
 	}
 
-	bool undo_manager_t::can_undo () const { return _index != 0;               }
-	bool undo_manager_t::can_redo () const { return _index != _records.size(); }
+	bool undo_manager_t::can_undo () const      { return _index != 0;               }
+	bool undo_manager_t::can_redo () const      { return _index != _records.size(); }
+	bool undo_manager_t::in_undo_group () const { return _nesting_count != 0;       }
 
 	void undo_manager_t::begin_undo_group (ranges_t const& ranges)
 	{
@@ -91,7 +92,7 @@ namespace ng
 			res = r.post_selection;
 			rev = r.post_revision;
 
-			if(_index < _records.size()-1 && res == _records[_index].pre_selection && should_merge(r, _records[_index]))
+			if(res == _records[_index].pre_selection && should_merge(r, _records[_index]))
 				res = ranges_t();
 		}
 		_buffer.set_revision(rev);
@@ -100,10 +101,10 @@ namespace ng
 		return res;
 	}
 
-	void undo_manager_t::will_replace (size_t from, size_t to, std::string const& str)
+	void undo_manager_t::will_replace (size_t from, size_t to, char const* buf, size_t len)
 	{
 		_records.erase(_records.begin() + _index, _records.end());
-		_records.emplace_back(from, _buffer.substr(from, to), str, _pre_selection, _pre_revision);
+		_records.emplace_back(from, _buffer.substr(from, to), std::string(buf, len), _pre_selection, _pre_revision);
 		_pre_selection = ranges_t();
 		++_changes;
 		++_index;

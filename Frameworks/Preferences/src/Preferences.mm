@@ -22,15 +22,15 @@ OAK_DEBUG_VAR(Preferences);
 @end
 
 @implementation Preferences
-+ (Preferences*)sharedInstance
++ (instancetype)sharedInstance
 {
-	static Preferences* SharedInstance = [Preferences new];
-	return SharedInstance;
+	static Preferences* sharedInstance = [self new];
+	return sharedInstance;
 }
 
 + (void)restoreWindowWithIdentifier:(NSString*)identifier state:(NSCoder*)state completionHandler:(void (^)(NSWindow*, NSError*))completionHandler
 {
-	completionHandler([self sharedInstance].windowController.window, nil);
+	completionHandler([Preferences sharedInstance].windowController.window, nil);
 }
 
 - (NSWindowController*)windowController
@@ -67,7 +67,7 @@ OAK_DEBUG_VAR(Preferences);
 	[self.windowController selectControllerAtIndex:index];
 }
 
-- (void)updateGoToMenu:(NSMenu*)aMenu
+- (void)updateSelectTabMenu:(NSMenu*)aMenu
 {
 	if(![self.windowController.window isKeyWindow])
 		return;

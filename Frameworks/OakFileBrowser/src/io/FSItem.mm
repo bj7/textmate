@@ -47,7 +47,7 @@ static ino_t inode (std::string const& path)
 
 - (BOOL)isEqual:(id)otherObject
 {
-	return [otherObject isKindOfClass:[self class]] && [self.url isEqual:[otherObject url]] && self.scmStatus == [otherObject scmStatus] && self.isMissing == [otherObject isMissing];
+	return otherObject && [otherObject isKindOfClass:[self class]] && [self.url isEqual:[otherObject url]] && self.scmStatus == [otherObject scmStatus] && self.isMissing == [otherObject isMissing];
 }
 
 - (NSUInteger)hash
@@ -123,52 +123,33 @@ static ino_t inode (std::string const& path)
 	}
 }
 
-- (BOOL)setNewDisplayName:(NSString*)newDisplayName view:(NSView*)view
+- (BOOL)renameToName:(NSString*)newBasename view:(NSView*)view
 {
-	if(![_url isFileURL] || OakIsEmptyString(newDisplayName))
+	if(!_url.isFileURL || OakIsEmptyString(newBasename))
 		return NO;
 
-	std::string src = [[_url path] fileSystemRepresentation];
-	std::string dst = path::join(path::parent(src), [[newDisplayName stringByReplacingOccurrencesOfString:@"/" withString:@":"] fileSystemRepresentation]);
+	std::string src = [_url.path fileSystemRepresentation];
+	std::string dst = path::join(path::parent(src), [[newBasename stringByReplacingOccurrencesOfString:@"/" withString:@":"] fileSystemRepresentation]);
+	if(src == dst)
+		return NO;
 
-	// “hidden extension” is ignored if Finder is set to show all file extensions, if there are multiple extensions, or if no application is assigned to the extension.
-	std::string const baseName    = path::name(src);
-	std::string const displayName = path::display_name(src);
-	bool hiddenExtension = baseName != displayName && (path::info(src) & path::flag::hidden_extension);
-
-	BOOL res = NO;
-	if(src == dst && hiddenExtension)
+	// ‘dst’ is only allowed to exist on case-insensitive file systems (Foo.txt → foo.txt)
+	if(!path::exists(dst) || inode(src) == inode(dst))
 	{
-		NSURL* dstURL = [NSURL fileURLWithPath:[NSString stringWithCxxString:dst]];
-		NSError* error;
-		if(!(res = [dstURL setResourceValue:@NO forKey:NSURLHasHiddenExtensionKey error:&error]))
-			NSLog(@"error: failed to show extension for %@: %@", _url, error);
+		NSURL* dstURL = [NSURL fileURLWithPath:to_ns(dst)];
+		if([[OakFileManager sharedInstance] renameItemAtURL:_url toURL:dstURL view:view])
+		{
+			self.url         = dstURL;
+			self.displayName = to_ns(path::display_name(dst));
+			return YES;
+		}
 	}
 	else
 	{
-		if(hiddenExtension)
-			dst += path::extension(src);
-
-		if(src != dst)
-		{
-			// ‘dst’ is allowed to exist on case-insensitive file systems (Foo.txt → foo.txt)
-			if(path::exists(dst) && inode(src) != inode(dst))
-			{
-				errno = EEXIST;
-				OakRunIOAlertPanel("Failed to rename the file at “%s”.", path::name(src).c_str());
-			}
-			else
-			{
-				NSURL* dstURL = [NSURL fileURLWithPath:[NSString stringWithCxxString:dst]];
-				if(res = [[OakFileManager sharedInstance] renameItemAtURL:_url toURL:dstURL view:view])
-				{
-					self.url         = dstURL;
-					self.displayName = [NSString stringWithCxxString:path::display_name(dst)];
-				}
-			}
-		}
+		errno = EEXIST;
+		OakRunIOAlertPanel("Failed to rename the file at “%s”.", path::name(src).c_str());
 	}
-	return res;
+	return NO;
 }
 
 - (FSItemURLType)urlType

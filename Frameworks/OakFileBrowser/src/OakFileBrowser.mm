@@ -19,10 +19,10 @@
 #import <OakAppKit/OakOpenWithMenu.h>
 #import <OakAppKit/OakUIConstructionFunctions.h>
 #import <OakAppKit/OakZoomingIcon.h>
+#import <OakAppKit/NSMenuItem Additions.h>
 #import <OakSystem/application.h>
+#import <OakCommand/OakCommand.h>
 #import <bundles/bundles.h>
-#import <document/document.h>
-#import <document/collection.h>
 #import <ns/ns.h>
 #import <text/ctype.h>
 #import <regexp/format_string.h>
@@ -30,6 +30,9 @@
 #import <settings/settings.h>
 
 OAK_DEBUG_VAR(FileBrowser_Controller);
+
+NSString* OakFileBrowserDidDuplicateURLs = @"OakFileBrowserDidDuplicateURLs";
+NSString* OakFileBrowserURLMapKey        = @"OakFileBrowserURLMapKey";
 
 static NSString* DisplayName (NSURL* url, size_t numberOfParents = 0)
 {
@@ -190,7 +193,7 @@ static bool is_binary (std::string const& path)
 	_outlineView.menu = [NSMenu new];
 	_outlineView.menu.delegate = self;
 
-	if([[[[NSUserDefaults standardUserDefaults] objectForKey:kUserDefaultsFileBrowserStyleKey] lowercaseString] isEqualToString:@"sourcelist"])
+	if([[[[NSUserDefaults standardUserDefaults] stringForKey:kUserDefaultsFileBrowserStyleKey] lowercaseString] isEqualToString:@"sourcelist"])
 		_outlineView.renderAsSourceList = YES;
 
 	[_outlineView setDraggingSourceOperationMask:NSDragOperationCopy|NSDragOperationMove|NSDragOperationLink forLocal:YES];
@@ -556,13 +559,8 @@ static bool is_binary (std::string const& path)
 
 - (NSArray*)selectedPaths
 {
-	NSMutableArray* res = [NSMutableArray array];
-	for(FSItem* item in self.selectedItems)
-	{
-		if([item.url isFileURL])
-			[res addObject:[item.url path]];
-	}
-	return res;
+	NSArray* fileURLItems = [self.selectedItems filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"url.isFileURL == YES"]];
+	return [fileURLItems valueForKeyPath:@"url.path"];
 }
 
 // ============
@@ -594,20 +592,22 @@ static bool is_binary (std::string const& path)
 
 - (void)duplicateSelectedEntries:(id)sender
 {
-	NSMutableArray* duplicatedURLs = [NSMutableArray array];
+	NSMutableDictionary* duplicatedURLs = [NSMutableDictionary dictionary];
 	for(NSURL* url in self.selectedURLs)
 	{
 		if([url isFileURL])
 		{
 			if(NSURL* res = [[OakFileManager sharedInstance] createDuplicateOfURL:url view:_view])
-				[duplicatedURLs addObject:res];
+				duplicatedURLs[url] = res;
 		}
 	}
 
 	if([duplicatedURLs count] == 1)
-		[_outlineViewDelegate editURL:[duplicatedURLs lastObject]];
+		[_outlineViewDelegate editURL:[[duplicatedURLs allValues] lastObject]];
 	else if([duplicatedURLs count] > 1)
-		[_outlineViewDelegate selectURLs:duplicatedURLs expandChildren:NO];
+		[_outlineViewDelegate selectURLs:[duplicatedURLs allValues] expandChildren:NO];
+
+	[[NSNotificationCenter defaultCenter] postNotificationName:OakFileBrowserDidDuplicateURLs object:self userInfo:@{ OakFileBrowserURLMapKey : duplicatedURLs }];
 }
 
 - (void)revealSelectedItem:(id)sender
@@ -800,11 +800,10 @@ static bool is_binary (std::string const& path)
 {
 	if(bundles::item_ptr item = bundles::lookup(to_s([sender representedObject])))
 	{
-		std::map<std::string, std::string> map = oak::basic_environment();
-		map << [self variables] << item->bundle_variables();
-		map = bundles::scope_variables(map);
-		map = variables_for_path(map, to_s([self.selectedPaths firstObject]));
-		document::run(parse_command(item), ng::buffer_t(), ng::ranges_t(), [self.selectedPaths count] == 1 ? document::create(map["TM_SELECTED_FILE"]) : document::document_ptr(), map);
+		// TODO For commands that have ‘input = document’ we should provide the document
+		OakCommand* command = [[OakCommand alloc] initWithBundleCommand:parse_command(item)];
+		command.firstResponder = self;
+		[command executeWithInput:nil variables:item->bundle_variables() outputHandler:nil];
 	}
 }
 
@@ -904,12 +903,6 @@ static bool is_binary (std::string const& path)
 			for(auto pair : sorted)
 				[[aMenu addItemWithTitle:[NSString stringWithCxxString:pair.first] action:@selector(executeBundleCommand:) keyEquivalent:@""] setRepresentedObject:[NSString stringWithCxxString:pair.second->uuid()]];
 		}
-	}
-
-	if([selectedItems count])
-	{
-		[aMenu addItem:[NSMenuItem separatorItem]];
-		[aMenu addItemWithTitle:@"Select None" action:@selector(deselectAll:) keyEquivalent:@"A"];
 	}
 
 	if(hasFileSelected || self.canPaste)
@@ -1030,6 +1023,7 @@ static bool is_binary (std::string const& path)
 - (void)openItems:(NSArray*)items animate:(BOOL)animateFlag
 {
 	NSMutableArray* urlsToOpen     = [NSMutableArray array];
+	NSMutableArray* urlsToShow     = [NSMutableArray array];
 	NSMutableArray* itemsToAnimate = [NSMutableArray array];
 
 	for(FSItem* item in items)
@@ -1053,7 +1047,7 @@ static bool is_binary (std::string const& path)
 		{
 			case FSItemURLTypeFolder:
 			case FSItemURLTypeUnknown:
-				return [self goToURL:itemURL];
+				[urlsToShow addObject:itemURL];
 			break;
 
 			case FSItemURLTypePackage:
@@ -1067,6 +1061,9 @@ static bool is_binary (std::string const& path)
 			break;
 		}
 	}
+
+	if(itemsToAnimate.count == 0 && urlsToShow.count > 0)
+		return [self goToURL:urlsToShow.firstObject];
 
 	if(animateFlag && ![[NSUserDefaults standardUserDefaults] boolForKey:kUserDefaultsFileBrowserOpenAnimationDisabled])
 	{
@@ -1230,7 +1227,7 @@ static bool is_binary (std::string const& path)
 - (BOOL)validateMenuItem:(NSMenuItem*)item
 {
 	BOOL res = YES;
-	static std::set<SEL> const requireSelection{ @selector(didDoubleClickOutlineView:), @selector(editSelectedEntries:), @selector(duplicateSelectedEntries:), @selector(cut:), @selector(copy:), @selector(delete:) };
+	static std::set<SEL> const requireSelection{ @selector(didDoubleClickOutlineView:), @selector(editSelectedEntries:), @selector(duplicateSelectedEntries:), @selector(cut:), @selector(copy:), @selector(delete:), @selector(deselectAll:) };
 
 	NSUInteger selectedFiles = 0;
 	struct stat buf;
@@ -1290,7 +1287,7 @@ static bool is_binary (std::string const& path)
 					default: items = [NSString stringWithFormat:@" %ld Items", selectedFiles]; break;
 				}
 			}
-			[item setTitle:[NSString stringWithFormat:info.format, items]];
+			[item setDynamicTitle:[NSString stringWithFormat:info.format, items]];
 		}
 	}
 

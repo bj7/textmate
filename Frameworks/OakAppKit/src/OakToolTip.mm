@@ -4,7 +4,7 @@
 
 OAK_DEBUG_VAR(OakToolTip);
 
-@interface OakToolTip : NSWindow
+@interface OakToolTip : NSPanel
 {
 	OBJC_WATCH_LEAKS(OakToolTip);
 
@@ -19,7 +19,7 @@ OAK_DEBUG_VAR(OakToolTip);
 - (void)showAtLocation:(NSPoint)aPoint forScreen:(NSScreen*)aScreen;
 @end
 
-static __unsafe_unretained OakToolTip* LastToolTip;
+static __weak OakToolTip* LastToolTip;
 
 @implementation OakToolTip
 + (void)initialize
@@ -35,14 +35,17 @@ static __unsafe_unretained OakToolTip* LastToolTip;
 	D(DBF_OakToolTip, bug("\n"););
 	if(self = [super initWithContentRect:NSZeroRect styleMask:NSBorderlessWindowMask backing:NSBackingStoreBuffered defer:NO])
 	{
-		[self setReleasedWhenClosed:NO];
+		NSFont* defaultFont = [NSFont toolTipsFontOfSize:0];
+		NSFontDescriptor* descriptor = [defaultFont.fontDescriptor fontDescriptorByAddingAttributes:@{
+			NSFontFeatureSettingsAttribute: @[ @{ NSFontFeatureTypeIdentifierKey : @(kNumberSpacingType), NSFontFeatureSelectorIdentifierKey : @(kMonospacedNumbersSelector) } ]
+		}];
+		defaultFont = [NSFont fontWithDescriptor:descriptor size:0];
+
 		[self setAlphaValue:0.97];
 		[self setOpaque:NO];
 		[self setBackgroundColor:[NSColor colorWithCalibratedRed:1.00 green:0.96 blue:0.76 alpha:1]];
 		[self setHasShadow:YES];
 		[self setLevel:NSStatusWindowLevel];
-		[self setHidesOnDeactivate:YES];
-		[self setIgnoresMouseEvents:YES];
 
 		field = [[NSTextField alloc] initWithFrame:NSZeroRect];
 		[field setEditable:NO];
@@ -51,7 +54,7 @@ static __unsafe_unretained OakToolTip* LastToolTip;
 		[field setBordered:NO];
 		[field setDrawsBackground:NO];
 		[field setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
-		[field setFont:[NSFont toolTipsFontOfSize:0]];
+		[field setFont:defaultFont];
 		[field setStringValue:@"This is a nice little code block"];
 
 		[self setContentView:field];
@@ -60,12 +63,6 @@ static __unsafe_unretained OakToolTip* LastToolTip;
 		self.enforceMouseThreshold = YES;
 	}
 	return self;
-}
-
-- (void)dealloc
-{
-	D(DBF_OakToolTip, bug("\n"););
-	LastToolTip = nil;
 }
 
 - (void)setFont:(NSFont*)aFont
@@ -79,11 +76,6 @@ static __unsafe_unretained OakToolTip* LastToolTip;
 	D(DBF_OakToolTip, bug("%s\n", [aString UTF8String]););
 	ASSERT(aString != nil);
 	[field setStringValue:aString];
-}
-
-- (BOOL)canBecomeKeyWindow
-{
-	return YES;
 }
 
 - (BOOL)shouldCloseForMousePosition:(NSPoint)aPoint
@@ -113,55 +105,19 @@ static __unsafe_unretained OakToolTip* LastToolTip;
 
 - (void)showUntilUserActivity
 {
-	// since we run a lcoal event loop we wish to ensure that this is not done in the middle of something that can’t handle such thing, e.g. our call stack could be something like lock_buffer() → do_edit_operation() → show_tool_tip() → [here]. Additionally by using performSelector:withObject:afterDelay: we keep ‘self’ retained while the tool tip is up.
-	[self performSelector:@selector(showUntilUserActivityDelayed:) withObject:self afterDelay:0];
-}
-
-- (void)showUntilUserActivityDelayed:(id)sender
-{
 	[self orderFront:self];
 
 	didOpenAtDate = [NSDate date];
 	mousePositionWhenOpened = NSZeroPoint;
 
-	NSWindow* keyWindow = [NSApp keyWindow];
-	if(!keyWindow)
-	{
-		keyWindow = self;
-		[self makeKeyWindow];
-	}
+	__weak __block id eventMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:(NSLeftMouseDownMask|NSRightMouseDownMask|NSMouseMovedMask|NSKeyDownMask|NSScrollWheelMask|NSOtherMouseDownMask) handler:^NSEvent*(NSEvent* event){
+		if([event type] == NSMouseMoved && ![self shouldCloseForMousePosition:[NSEvent mouseLocation]])
+			return event;
 
-	BOOL didAcceptMouseMovedEvents = [keyWindow acceptsMouseMovedEvents];
-	[keyWindow setAcceptsMouseMovedEvents:YES];
-
-	BOOL slowFadeOut = NO;
-	while(NSEvent* event = [NSApp nextEventMatchingMask:NSAnyEventMask untilDate:[NSDate distantFuture] inMode:NSDefaultRunLoopMode dequeue:YES])
-	{
-		[NSApp sendEvent:event];
-
-		static std::set<NSEventType> const orderOutEvents = { NSLeftMouseDown, NSRightMouseDown, NSOtherMouseDown, NSKeyDown, NSScrollWheel };
-		if(orderOutEvents.find([event type]) != orderOutEvents.end())
-		{
-			D(DBF_OakToolTip, bug("close because of key/mouse down event\n"););
-			break;
-		}
-
-		if([event type] == NSMouseMoved && [self shouldCloseForMousePosition:[NSEvent mouseLocation]])
-		{
-			D(DBF_OakToolTip, bug("close because mouse was moved\n"););
-			slowFadeOut = YES;
-			break;
-		}
-
-		if(keyWindow != [NSApp keyWindow] || ![NSApp isActive])
-		{
-			D(DBF_OakToolTip, bug("close because focus lost (%s → %s) / app gone inactive (%s)\\\\n", [[keyWindow description] UTF8String], [[[NSApp keyWindow] description] UTF8String], BSTR(![NSApp isActive])););
-			break;
-		}
-	}
-
-	[keyWindow setAcceptsMouseMovedEvents:didAcceptMouseMovedEvents];
-	[self fadeOutSlowly:slowFadeOut];
+		[self fadeOutSlowly:[event type] == NSMouseMoved];
+		[NSEvent removeMonitor:eventMonitor];
+		return event;
+	}];
 }
 
 - (void)showAtLocation:(NSPoint)aPoint forScreen:(NSScreen*)aScreen
@@ -221,9 +177,7 @@ void OakShowToolTip (NSString* msg, NSPoint location)
 		}
 
 		[toolTip showAtLocation:location forScreen:screen];
-
-		if(OakToolTip* lastToolTip = LastToolTip)
-			[lastToolTip performSelector:@selector(orderOut:) withObject:nil afterDelay:0];
+		[LastToolTip close];
 		LastToolTip = toolTip;
 	}
 }

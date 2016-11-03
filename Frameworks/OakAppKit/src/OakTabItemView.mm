@@ -2,6 +2,10 @@
 #import "OakRolloverButton.h"
 #import "NSImage Additions.h"
 
+static NSString* kUserDefaultsTabItemMinWidthKey       = @"tabItemMinWidth";
+static NSString* kUserDefaultsTabItemMaxWidthKey       = @"tabItemMaxWidth";
+static NSString* kUserDefaultsTabItemLineBreakStyleKey = @"tabItemLineBreakStyle";
+
 @interface OakTabBarStyle ()
 {
 	NSDictionary* _images;
@@ -14,8 +18,17 @@
 @implementation OakTabBarStyle
 + (instancetype)sharedInstance
 {
-	static id sharedInstance = [self new];
+	static OakTabBarStyle* sharedInstance = [self new];
 	return sharedInstance;
+}
+
++ (void)initialize
+{
+	[[NSUserDefaults standardUserDefaults] registerDefaults:@{
+		kUserDefaultsTabItemMinWidthKey       : @(120),
+		kUserDefaultsTabItemMaxWidthKey       : @(250),
+		kUserDefaultsTabItemLineBreakStyleKey : @(NSLineBreakByTruncatingMiddle),
+	}];
 }
 
 - (NSDictionary*)imagesForNames:(NSDictionary*)imageNames
@@ -127,7 +140,7 @@
 	if(self = [super init])
 	{
 		NSMutableParagraphStyle* parStyle = [NSMutableParagraphStyle new];
-		[parStyle setLineBreakMode:NSLineBreakByTruncatingMiddle];
+		[parStyle setLineBreakMode:(NSLineBreakMode)[[NSUserDefaults standardUserDefaults] integerForKey:kUserDefaultsTabItemLineBreakStyleKey]];
 
 		_activeTabTextStyles = @{
 			NSParagraphStyleAttributeName  : parStyle,
@@ -138,7 +151,8 @@
 		_inactiveTabTextStyles = _activeTabTextStyles.mutableCopy;
 		_inactiveTabTextStyles[NSForegroundColorAttributeName] = [NSColor colorWithCalibratedWhite:0.5 alpha:1];
 
-		if([[NSProcessInfo processInfo] respondsToSelector:@selector(isOperatingSystemAtLeastVersion:)] && [[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion:{ 10, 10, 0 }])
+		// MAC_OS_X_VERSION_10_10
+		if([NSProcessInfo instancesRespondToSelector:@selector(isOperatingSystemAtLeastVersion:)] && [[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion:{ 10, 10, 0 }])
 		{
 			_selectedTabTextStyles = _activeTabTextStyles.mutableCopy;
 			_selectedTabTextStyles[NSForegroundColorAttributeName] = [NSColor blackColor];
@@ -167,8 +181,8 @@
 
 		NSImage* rightCapImage = _images[@"rightTabCap"][@"AW_normal"];
 		_tabViewSpacing = rightCapImage ? -rightCapImage.size.width : 0;
-		_minimumTabSize = 120;
-		_maximumTabSize = 250;
+		_minimumTabSize = [[NSUserDefaults standardUserDefaults] integerForKey:kUserDefaultsTabItemMinWidthKey];
+		_maximumTabSize = [[NSUserDefaults standardUserDefaults] integerForKey:kUserDefaultsTabItemMaxWidthKey];
 	}
 	return self;
 }
@@ -242,7 +256,7 @@
 @property (nonatomic) NSTextField* textField;
 @property (nonatomic) NSMutableArray* myConstraints;
 @property (nonatomic) NSTrackingArea* trackingArea;
-@property (nonatomic) BOOL isMouseInside;
+@property (nonatomic, getter = isMouseInside) BOOL mouseInside;
 @end
 
 @implementation OakTabItemView
@@ -282,7 +296,7 @@
 	[style updateTabItemView:self inSelectedTab:_selected];
 	[style updateCloseButton:_closeButton inSelectedTab:_selected modified:_modified];
 	[style updateOverflowButton:_overflowButton inSelectedTab:_selected];
-	_closeButton.hidden = !_isMouseInside && !_modified;
+	_closeButton.hidden = !_mouseInside && !_modified;
 }
 
 - (NSRect)contentFrame
@@ -361,7 +375,7 @@
 	if(_trackingArea)
 		[self removeTrackingArea:_trackingArea];
 	NSTrackingAreaOptions options = NSTrackingMouseEnteredAndExited|NSTrackingActiveAlways;
-	if(self.isMouseInside = NSMouseInRect([self convertPoint:[self.window mouseLocationOutsideOfEventStream] fromView:nil], [self visibleRect], [self isFlipped]))
+	if(self.mouseInside = NSMouseInRect([self convertPoint:[self.window mouseLocationOutsideOfEventStream] fromView:nil], [self visibleRect], [self isFlipped]))
 		options |= NSTrackingAssumeInside;
 
 	CGFloat x1 = 0.5 * _leftCapView.activeBackgroundImage.size.width;
@@ -372,20 +386,20 @@
 
 - (void)mouseEntered:(NSEvent*)anEvent
 {
-	self.isMouseInside = YES;
+	self.mouseInside = YES;
 }
 
 - (void)mouseExited:(NSEvent*)anEvent
 {
-	self.isMouseInside = NO;
+	self.mouseInside = NO;
 }
 
-- (void)setIsMouseInside:(BOOL)flag
+- (void)setMouseInside:(BOOL)flag
 {
-	if(_isMouseInside == flag)
+	if(_mouseInside == flag)
 		return;
-	_isMouseInside = flag;
-	_closeButton.hidden = !_isMouseInside && !_modified;
+	_mouseInside = flag;
+	_closeButton.hidden = !_mouseInside && !_modified;
 }
 
 - (void)updateTextFieldTitle

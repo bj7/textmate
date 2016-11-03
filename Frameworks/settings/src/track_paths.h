@@ -66,6 +66,7 @@ private:
 				dispatch_source_cancel(pair.second->source);
 				dispatch_release(pair.second->source);
 			}
+
 			_records.clear();
 		}
 

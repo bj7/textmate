@@ -6,8 +6,7 @@
 #include <oak/callbacks.h>
 #include <regexp/find.h>
 #include <command/parser.h>
-#include <document/document.h>
-#include <layout/layout.h>
+#include <selection/selection.h>
 
 namespace ng
 {
@@ -166,12 +165,11 @@ namespace ng
 	{
 		editor_t ();
 		editor_t (buffer_t& buffer);
-		editor_t (document::document_ptr document);
 
 		editor_delegate_t* delegate () const            { return _delegate; }
 		void set_delegate (editor_delegate_t* delegate) { _delegate = delegate; }
 
-		void perform (action_t action, layout_t const* layout = NULL, indent_correction_t indentCorrections = kIndentCorrectAlways, std::string const& scopeAttributes = NULL_STR);
+		void perform (action_t action, layout_movement_t const* layout = NULL, indent_correction_t indentCorrections = kIndentCorrectAlways, std::string const& scopeAttributes = NULL_STR);
 
 		bool disallow_tab_expansion () const;
 
@@ -181,10 +179,10 @@ namespace ng
 		ranges_t replace_all (std::string const& searchFor, std::string const& replaceWith, find::options_t options = find::none, bool searchOnlySelection = false);
 		void delete_tab_trigger (std::string const& str);
 
-		void macro_dispatch (plist::dictionary_t const& args, std::map<std::string, std::string> const& variables);
+		void macro_dispatch (plist::dictionary_t const& args, std::map<std::string, std::string> const& variables, std::function<void(bundle_command_t const&, ng::buffer_api_t const&, ng::ranges_t const&, std::map<std::string, std::string> const&)> const& runner);
 		void find_dispatch (plist::dictionary_t const& args);
 		void snippet_dispatch (plist::dictionary_t const& args, std::map<std::string, std::string> const& variables);
-		void execute_dispatch (plist::dictionary_t const& args, std::map<std::string, std::string> const& variables);
+		void execute_dispatch (plist::dictionary_t const& args, std::map<std::string, std::string> const& variables, std::function<void(bundle_command_t const&, ng::buffer_api_t const&, ng::ranges_t const&, std::map<std::string, std::string> const&)> const& runner);
 
 		scope::context_t scope (std::string const& scopeAttributes) const;
 		std::map<std::string, std::string> editor_variables (std::string const& scopeAttributes) const;
@@ -201,7 +199,7 @@ namespace ng
 		void sanitize_selection ();
 
 		void perform_replacements (std::multimap<std::pair<size_t, size_t>, std::string> const& replacements);
-		bool handle_result (std::string const& out, output::type placement, output_format::type format, output_caret::type outputCaret, ng::ranges_t const& inputRanges, std::map<std::string, std::string> environment);
+		bool handle_result (std::string const& out, output::type placement, output_format::type format, output_caret::type outputCaret, ng::ranges_t const& inputRanges, std::map<std::string, std::string> const& environment);
 
 		void clear_snippets ();
 
@@ -255,7 +253,7 @@ namespace ng
 			void advance ()                                                    { if(++_index >= _suggestions.size()) _index = 0;  }
 			void recede ()                                                     { if(--_index < 0) _index = _suggestions.size()-1; }
 
-      private:
+		private:
 			size_t _revision = 0;
 			ng::ranges_t _ranges;
 
@@ -300,12 +298,7 @@ namespace ng
 		bool _extend_yank_clipboard = false;
 
 		editor_delegate_t* _delegate = NULL;
-		document::document_ptr _document;
 	};
-
-	typedef std::shared_ptr<editor_t> editor_ptr;
-
-	PUBLIC editor_ptr editor_for_document (document::document_ptr document);
 
 } /* ng */
 

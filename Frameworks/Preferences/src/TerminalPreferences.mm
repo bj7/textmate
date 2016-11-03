@@ -76,15 +76,15 @@ static bool mk_dir (std::string const& path, AuthorizationRef& auth)
 	{
 		if(access(path::parent(path).c_str(), W_OK) == 0)
 		{
-			if(mkdir(path.c_str(), S_IRUSR|S_IWUSR|S_IXUSR|S_IRGRP|S_IWGRP|S_IXGRP|S_IROTH|S_IWOTH|S_IXOTH) == 0)
+			if(mkdir(path.c_str(), S_IRWXU|S_IRWXG|S_IRWXO) == 0)
 				return true;
-			perror(("mkdir(" + path + ")").c_str());
+			perrorf("TerminalPreferences: mkdir(\"%s\")", path.c_str());
 		}
 		else
 		{
 			if(run_auth_command(auth, "/bin/mkdir", path.c_str(), NULL))
 				return true;
-			perror(("/bin/mkdir " + path).c_str());
+			perrorf("TerminalPreferences: /bin/mkdir \"%s\"", path.c_str());
 		}
 	}
 	return false;
@@ -100,13 +100,13 @@ static bool rm_path (std::string const& path, AuthorizationRef& auth)
 	{
 		if(unlink(path.c_str()) == 0)
 			return true;
-		perror(("unlink " + path).c_str());
+		perrorf("TerminalPreferences: unlink \"%s\"", path.c_str());
 	}
 	else
 	{
 		if(run_auth_command(auth, "/bin/rm", path.c_str(), NULL))
 			return true;
-		perror(("/bin/rm " + path).c_str());
+		perrorf("TerminalPreferences: /bin/rm \"%s\"", path.c_str());
 	}
 	return false;
 }
@@ -122,13 +122,13 @@ static bool cp_path (std::string const& src, std::string const& dst, Authorizati
 	{
 		if(copyfile(src.c_str(), dst.c_str(), NULL, COPYFILE_ALL | COPYFILE_NOFOLLOW_SRC) == 0)
 			return true;
-		perror(("copyfile(" + src + ", " + dst + ")").c_str());
+		perrorf("TerminalPreferences: copyfile(\"%s\", \"%s\", NULL, COPYFILE_ALL | COPYFILE_NOFOLLOW_SRC)", src.c_str(), dst.c_str());
 	}
 	else
 	{
 		if(run_auth_command(auth, "/bin/cp", "-p", src.c_str(), dst.c_str(), NULL))
 			return true;
-		perror(("/bin/cp -p " + src + " " + dst).c_str());
+		perrorf("TerminalPreferences: /bin/cp -p \"%s\" \"%s\"", src.c_str(), dst.c_str());
 	}
 	return false;
 }
@@ -153,8 +153,6 @@ static bool uninstall_mate (std::string const& path)
 }
 
 @implementation TerminalPreferences
-@synthesize installIndicaitorImage;
-
 - (id)init
 {
 	if(self = [super initWithNibName:@"TerminalPreferences" label:@"Terminal" image:[NSImage imageNamed:@"Terminal" inSameBundleAsClass:[self class]]])

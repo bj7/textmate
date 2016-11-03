@@ -1,13 +1,15 @@
-#import "scan_path.h" // find::match_t
-#import <document/document.h>
+@class OakDocument;
+@class OakDocumentMatch;
 
 @interface FFResultNode : NSObject
 @property (nonatomic, weak) FFResultNode* parent;
 @property (nonatomic, readonly) NSUInteger countOfLeafs;
 @property (nonatomic, readonly) NSUInteger countOfExcluded;
+@property (nonatomic, readonly) NSUInteger countOfReadOnly;
+@property (nonatomic, readonly) NSUInteger countOfExcludedReadOnly;
 
-+ (FFResultNode*)resultNodeWithMatch:(find::match_t const&)aMatch baseDirectory:(NSString*)base;
-+ (FFResultNode*)resultNodeWithMatch:(find::match_t const&)aMatch;
++ (FFResultNode*)resultNodeWithMatch:(OakDocumentMatch*)aMatch baseDirectory:(NSString*)base;
++ (FFResultNode*)resultNodeWithMatch:(OakDocumentMatch*)aMatch;
 
 - (void)addResultNode:(FFResultNode*)aMatch;
 - (void)removeFromParent;
@@ -16,18 +18,15 @@
 - (FFResultNode*)lastResultNode;
 
 - (NSUInteger)lineSpan;
-- (NSAttributedString*)excerptWithReplacement:(NSString*)replacementString;
-- (NSImage*)icon;
+- (NSAttributedString*)excerptWithReplacement:(NSString*)replacementString font:(NSFont*)font;
 
 @property (nonatomic) NSString* replaceString;
 @property (nonatomic) NSArray* children;
 @property (nonatomic) BOOL excluded;
-@property (nonatomic) BOOL ignored;
-@property (nonatomic) NSImage* icon;
+@property (nonatomic, getter = isReadOnly) BOOL readOnly;
 
-@property (nonatomic, readonly) find::match_t const& match;
-@property (nonatomic, readonly) document::document_ptr document;
+@property (nonatomic, readonly) OakDocumentMatch* match;
+@property (nonatomic, readonly) OakDocument* document;
 @property (nonatomic, readonly) NSString* path;
-@property (nonatomic, readonly) NSString* identifier;
 @property (nonatomic) NSAttributedString* displayPath;
 @end

@@ -2,7 +2,6 @@
 #import "HOWebViewDelegateHelper.h"
 #import "HOStatusBar.h"
 #import <OakAppKit/OakUIConstructionFunctions.h>
-#import <OakAppKit/NSColor Additions.h>
 
 static NSString* EscapeHTML (NSString* str)
 {
@@ -16,30 +15,13 @@ static void ShowLoadErrorForURL (WebFrame* frame, NSURL* url, NSError* error)
 	[frame loadHTMLString:errorMsg baseURL:[NSURL fileURLWithPath:NSTemporaryDirectory()]];
 }
 
-#if !defined(MAC_OS_X_VERSION_10_11) || (MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_11)
-@interface HOBrowserView ()
-#else
 @interface HOBrowserView () <WebPolicyDelegate, WebUIDelegate, WebResourceLoadDelegate>
-#endif
 @property (nonatomic, readwrite) WebView* webView;
 @property (nonatomic, readwrite) HOStatusBar* statusBar;
 @property (nonatomic) HOWebViewDelegateHelper* webViewDelegateHelper;
 @end
 
 @implementation HOBrowserView
-
-@dynamic needsNewWebView;
-
-+ (BOOL)requiresConstraintBasedLayout
-{
-	return YES;
-}
-
-- (NSSize)intrinsicContentSize
-{
-	return NSMakeSize(NSViewNoInstrinsicMetric, NSViewNoInstrinsicMetric);
-}
-
 - (id)initWithFrame:(NSRect)frame
 {
 	if(self = [super initWithFrame:frame])
@@ -193,7 +175,7 @@ in the hierachy returns YES, the key (equivalent) event is then passed to the me
 
 - (void)webView:(WebView*)sender didStartProvisionalLoadForFrame:(WebFrame*)frame
 {
-	_statusBar.isBusy = YES;
+	_statusBar.busy = YES;
 	[self setUpdatesProgress:YES];
 }
 
@@ -213,7 +195,7 @@ in the hierachy returns YES, the key (equivalent) event is then passed to the me
 {
 	_statusBar.canGoBack    = _webView.canGoBack;
 	_statusBar.canGoForward = _webView.canGoForward;
-	_statusBar.isBusy       = NO;
+	_statusBar.busy         = NO;
 	_statusBar.progress     = 0;
 }
 @end

@@ -86,7 +86,7 @@ namespace path
 	PUBLIC std::string move_to_trash (std::string const& path);
 	PUBLIC std::string duplicate (std::string const& src, std::string dst = NULL_STR, bool overwrite = false);
 	PUBLIC bool make_dir (std::string const& path);
-	PUBLIC void touch_tree (std::string const& basePath);
+	PUBLIC bool rename_or_copy (std::string const& src, std::string const& dst, bool createParent = true);
 
 	// ===============
 	// = Global Info =

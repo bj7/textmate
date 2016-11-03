@@ -9,6 +9,7 @@
 #include <text/utf8.h>
 #include <text/ctype.h>
 #include <oak/debug.h>
+#include <crash/info.h>
 
 OAK_DEBUG_VAR(Layout);
 
@@ -37,17 +38,18 @@ namespace ng
 	// = layout_t =
 	// ============
 
-	layout_t::layout_t (ng::buffer_t& buffer, theme_ptr const& theme, bool softWrap, bool scrollPastEnd, size_t wrapColumn, std::string const& folded, ng::layout_t::margin_t const& margin) : _folds(std::make_shared<folds_t>(buffer)), _buffer(buffer), _theme(theme), _tab_size(buffer.indent().tab_size()), _wrapping(softWrap), _scroll_past_end(scrollPastEnd), _wrap_column(wrapColumn), _margin(margin)
+	layout_t::layout_t (ng::buffer_t& buffer, theme_ptr const& theme, std::string const& fontName, CGFloat fontSize, bool softWrap, bool scrollPastEnd, size_t wrapColumn, std::string const& folded, ng::layout_t::margin_t const& margin) : _folds(std::make_shared<folds_t>(buffer)), _buffer(buffer), _tab_size(buffer.indent().tab_size()), _wrapping(softWrap), _scroll_past_end(scrollPastEnd), _wrap_column(wrapColumn), _margin(margin)
 	{
 		struct parser_callback_t : ng::callback_t
 		{
 			parser_callback_t (layout_t& layout) : layout(layout) { }
-			void did_replace (size_t from, size_t to, std::string const& str) { layout.did_erase(from, to); layout.did_insert(from, from + str.size()); }
+			void did_replace (size_t from, size_t to, char const* buf, size_t len) { layout.did_erase(from, to); layout.did_insert(from, from + len); }
 
 		private:
 			layout_t& layout;
 		};
 
+		_theme = theme->copy_with_font_name_and_size(fontName, fontSize);
 		setup_font_metrics();
 
 		_rows.insert(_rows.end(), row_key_t(0, default_line_height()));
@@ -85,7 +87,7 @@ namespace ng
 
 	void layout_t::set_theme (theme_ptr const& theme)
 	{
-		_theme = theme;
+		_theme = _theme ? theme->copy_with_font_name_and_size(_theme->font_name(), _theme->font_size()) : theme;
 		clear_text_widths();
 	}
 
@@ -263,6 +265,8 @@ namespace ng
 		auto row = row_for_offset(index.index);
 		if(bol_as_eol && index.index == row->offset._length && row != _rows.begin())
 			--row;
+
+		const_cast<layout_t*>(this)->update_metrics_for_row(row);
 		return row->value.rect_at_index(index, *_metrics, _buffer, row->offset._length, CGPointMake(_margin.left, _margin.top + row->offset._height), bol_as_eol, wantsBaseline);
 	}
 
@@ -327,9 +331,12 @@ namespace ng
 						std::swap(r1, r2);
 					}
 
-					res.push_back(OakRectMake(r1.origin.x, r1.origin.y, content_width() - r1.origin.x + _margin.left, r1.size.height));
-					res.push_back(OakRectMake(_margin.left, CGRectGetMaxY(r1), content_width(), CGRectGetMinY(r2) - CGRectGetMaxY(r1)));
-					res.push_back(OakRectMake(_margin.left, r2.origin.y, r2.origin.x - _margin.left, r2.size.height));
+					CGFloat firstLineX = r1.origin.x == _margin.left ? 0 : r1.origin.x;
+					CGFloat lastLineX  = r2.origin.x == _margin.left ? _margin.left : 0;
+					CGFloat totalWidth = _margin.left + content_width() + _margin.right;
+					res.push_back(OakRectMake(firstLineX, r1.origin.y, totalWidth - firstLineX, r1.size.height));
+					res.push_back(OakRectMake(0, CGRectGetMaxY(r1), totalWidth, CGRectGetMinY(r2) - CGRectGetMaxY(r1)));
+					res.push_back(OakRectMake(lastLineX, r2.origin.y, r2.origin.x - lastLineX, r2.size.height));
 				}
 			}
 		}
@@ -389,6 +396,19 @@ namespace ng
 		return oldHeight != rowIter->key._height;
 	}
 
+	void layout_t::update_metrics_for_row (row_tree_t::iterator rowIter)
+	{
+		if(rowIter->value.layout(_theme, effective_soft_wrap(rowIter), effective_wrap_column(), *_metrics, CGRectZero, _buffer, rowIter->offset._length))
+		{
+			bool didUpdateHeight = update_row(rowIter);
+			if(_refresh_counter)
+			{
+				CGRect lineRect = full_width(rect_for(rowIter));
+				_dirty_rects.push_back(full_width(didUpdateHeight ? full_height(lineRect) : lineRect));
+			}
+		}
+	}
+
 	void layout_t::update_metrics (CGRect visibleRect)
 	{
 		CGFloat const yMin = CGRectGetMinY(visibleRect) - _margin.top;
@@ -399,17 +419,7 @@ namespace ng
 			--firstY;
 
 		foreach(row, firstY, _rows.lower_bound(yMax, &row_y_comp))
-		{
-			if(row->value.layout(_theme, effective_soft_wrap(row), effective_wrap_column(), *_metrics, visibleRect, _buffer, row->offset._length))
-			{
-				bool didUpdateHeight = update_row(row);
-				if(_refresh_counter)
-				{
-					CGRect lineRect = full_width(rect_for(row));
-					_dirty_rects.push_back(full_width(didUpdateHeight ? full_height(lineRect) : lineRect));
-				}
-			}
-		}
+			update_metrics_for_row(row);
 	}
 
 	bool layout_t::repair_folds (size_t from, size_t to)
@@ -566,9 +576,14 @@ namespace ng
 
 	std::vector<CGRect> layout_t::end_refresh_cycle (ng::ranges_t const& selection, CGRect visibleRect, ng::ranges_t const& highlightRanges)
 	{
+		crash_reporter_info_t info("end refresh %s", BSTR(_refresh_counter == 1));
+
 		std::vector<CGRect> res;
 		if(_refresh_counter == 1)
 		{
+			info << text::format("buffer revision %zu, previous revision %zu", _buffer.revision(), _pre_refresh_revision);
+			info << text::format("buffer caret %zu, previous caret %zu", selection.last().last.index, _pre_refresh_caret);
+
 			set_tab_size(_buffer.indent().tab_size());
 			update_metrics(visibleRect);
 
@@ -904,8 +919,15 @@ namespace ng
 
 	void layout_t::toggle_all_folds_at_level (size_t level)
 	{
+		size_t first = SIZE_T_MAX, second = 0;
 		for(auto const& range : _folds->toggle_all_at_level(level))
-			did_fold(range.first, range.second);
+		{
+			first  = std::min(range.first, first);
+			second = std::max(range.second, second);
+		}
+
+		if(first < second)
+			did_fold(first, second);
 	}
 
 	ng::range_t layout_t::folded_range_at_point (CGPoint point) const

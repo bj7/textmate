@@ -95,7 +95,7 @@ namespace
 
 namespace ng
 {
-	void symbols_t::replace (buffer_t* buffer, size_t from, size_t to, std::string const& str) { _symbols.replace(from, to, str.size()); }
+	void symbols_t::replace (buffer_t* buffer, size_t from, size_t to, size_t len) { _symbols.replace(from, to, len); }
 
 	void symbols_t::did_parse (buffer_t const* buffer, size_t from, size_t to)
 	{
@@ -118,7 +118,7 @@ namespace ng
 
 		size_t beginOfSymbol = 0;
 		bool inSymbol = false;
-		transform_t* transform = NULL;
+		transform_t* transform = nullptr;
 		foreach(it, buffer->_scopes.lower_bound(from), buffer->_scopes.lower_bound(to))
 		{
 			std::map<scope::scope_t, transform_t>::iterator transformIt = transforms.find(it->second);

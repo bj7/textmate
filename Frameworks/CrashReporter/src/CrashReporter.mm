@@ -49,24 +49,16 @@ static std::string create_gzipped_file (std::string const& path)
 @end
 
 @implementation CrashReporter
-+ (CrashReporter*)sharedInstance
++ (instancetype)sharedInstance
 {
-	static CrashReporter* instance = [CrashReporter new];
-	return instance;
+	static CrashReporter* sharedInstance = [self new];
+	return sharedInstance;
 }
 
 - (void)setupUserDefaultsContact:(id)sender
 {
-	NSString* name = NSFullUserName();
-	if(ABAddressBook* ab = [ABAddressBook sharedAddressBook])
-	{
-		ABMutableMultiValue* value = [[ab me] valueForProperty:kABEmailProperty];
-		if(NSString* email = [value valueAtIndex:[value indexForIdentifier:[value primaryIdentifier]]])
-			name = name ? [NSString stringWithFormat:@"%@ <%@>", name, email] : email;
-	}
-
 	[[NSUserDefaults standardUserDefaults] registerDefaults:@{
-		kUserDefaultsCrashReportsContactInfoKey : name ?: @"Anonymous",
+		kUserDefaultsCrashReportsContactInfoKey : NSFullUserName() ?: @"Anonymous",
 	}];
 }
 
@@ -91,13 +83,10 @@ static std::string create_gzipped_file (std::string const& path)
 
 - (void)applicationDidFinishLaunching:(NSNotification*)aNotification
 {
-	if(NSClassFromString(@"NSUserNotification"))
+	if(NSDictionary* userInfo = [aNotification userInfo])
 	{
-		if(NSDictionary* userInfo = [aNotification userInfo])
-		{
-			if(NSUserNotification* notification = userInfo[NSApplicationLaunchUserNotificationKey])
-				[self userNotificationCenter:[NSUserNotificationCenter defaultUserNotificationCenter] didActivateNotification:notification];
-		}
+		if(NSUserNotification* notification = userInfo[NSApplicationLaunchUserNotificationKey])
+			[self userNotificationCenter:[NSUserNotificationCenter defaultUserNotificationCenter] didActivateNotification:notification];
 	}
 }
 
@@ -110,7 +99,7 @@ static std::string create_gzipped_file (std::string const& path)
 
 		// has sent: reports we already posted
 		std::set<std::string> hasSent;
-		for(NSString* path in [[NSUserDefaults standardUserDefaults] arrayForKey:kUserDefaultsCrashReportsSent])
+		for(NSString* path in [[NSUserDefaults standardUserDefaults] stringArrayForKey:kUserDefaultsCrashReportsSent])
 			hasSent.insert([path fileSystemRepresentation]);
 
 		// can send: all reports from the last week
@@ -151,20 +140,17 @@ static std::string create_gzipped_file (std::string const& path)
 				{
 					didSend.insert(report);
 
-					if(NSClassFromString(@"NSUserNotification"))
+					auto location = response.find("location");
+					if(location != response.end())
 					{
-						auto location = response.find("location");
-						if(location != response.end())
-						{
-							NSString* path = [NSString stringWithCxxString:report];
-							NSString* url  = [NSString stringWithCxxString:location->second];
+						NSString* path = [NSString stringWithCxxString:report];
+						NSString* url  = [NSString stringWithCxxString:location->second];
 
-							NSUserNotification* notification = [NSUserNotification new];
-							notification.title           = @"Crash Report Sent";
-							notification.informativeText = @"Diagnostic information has been sent to MacroMates.com regarding your last crash.";
-							notification.userInfo        = @{ @"path" : path, @"url" : url };
-							[[NSUserNotificationCenter defaultUserNotificationCenter] deliverNotification:notification];
-						}
+						NSUserNotification* notification = [NSUserNotification new];
+						notification.title           = @"Crash Report Sent";
+						notification.informativeText = @"Diagnostic information has been sent to MacroMates.com regarding your last crash.";
+						notification.userInfo        = @{ @"path" : path, @"url" : url };
+						[[NSUserNotificationCenter defaultUserNotificationCenter] deliverNotification:notification];
 					}
 				}
 

@@ -5,7 +5,6 @@
 #include "proxy.h"
 #include "tbz.h"
 #include <io/path.h>
-#include <io/swap_file_data.h>
 #include <io/move_path.h>
 #include <text/case.h>
 #include <text/decode.h>
@@ -57,7 +56,7 @@ namespace network
 
 		static size_t receive_header (void* ptr, size_t size, size_t nmemb, void* udata)
 		{
-			user_data_t& data = *((user_data_t*)udata);
+			user_data_t& data = *static_cast<user_data_t*>(udata);
 
 			char const* bytes = (char const*)ptr;
 			size_t len = nmemb * size;
@@ -87,7 +86,7 @@ namespace network
 					if(header == "etag")
 						data.etag = value;
 					else if(header == "content-length")
-						data.total = strtol(value.c_str(), NULL, 10);
+						data.total = strtol(value.c_str(), nullptr, 10);
 					else if(header == kHTTPSigneeHeader || header == kHTTPSignatureHeader)
 						data.verify_signature.receive_header(header, value);
 				}
@@ -97,7 +96,7 @@ namespace network
 
 		static size_t receive_data (void* ptr, size_t size, size_t nmemb, void* udata)
 		{
-			user_data_t& data = *((user_data_t*)udata);
+			user_data_t& data = *static_cast<user_data_t*>(udata);
 
 			write(data.tbz_fd, ptr, size * nmemb);
 			write(data.tmp_fd, ptr, size * nmemb);
@@ -113,7 +112,7 @@ namespace network
 		if(CURL* handle = curl_easy_init())
 		{
 			std::string tbzDestination = path::cache("dl_archive_contents");
-			mkdir(tbzDestination.c_str(), S_IRUSR|S_IWUSR|S_IXUSR|S_IRGRP|S_IWGRP|S_IXGRP|S_IROTH|S_IWOTH|S_IXOTH);
+			mkdir(tbzDestination.c_str(), S_IRWXU|S_IRWXG|S_IRWXO);
 			tbz_t tbz(tbzDestination);
 
 			std::string tmpPath = path::temp("dl_bytes");
@@ -140,7 +139,7 @@ namespace network
 			curl_easy_setopt(handle, CURLOPT_HEADERFUNCTION,   &receive_header);
 			curl_easy_setopt(handle, CURLOPT_HEADERDATA,       &data);
 
-			struct curl_slist* headers = NULL;
+			struct curl_slist* headers = nullptr;
 			std::string const etag = path::get_attr(destination, kHTTPEntityTagAttribute);
 			if(etag != NULL_STR)
 			{
@@ -177,19 +176,12 @@ namespace network
 			bool goodSignature = false;
 			if(serverReply == 200)
 			{
-				if(data.verify_signature.receive_end(error))
+				if(goodSignature = data.verify_signature.receive_end(error))
 				{
-					goodSignature = true;
-					if(path::swap_and_unlink(tmpPath, destination))
-					{
-						path::set_attr(destination, kHTTPEntityTagAttribute, data.etag);
-						path::set_attr(destination, kHTTPSigneeHeader,       data.verify_signature.signee());
-						path::set_attr(destination, kHTTPSignatureHeader,    data.verify_signature.signature());
-					}
-					else
-					{
-						fprintf(stderr, "error with swap_and_unlink: %s → %s\n", tmpPath.c_str(), destination.c_str());
-					}
+					path::set_attr(tmpPath, kHTTPEntityTagAttribute, data.etag);
+					path::set_attr(tmpPath, kHTTPSigneeHeader,       data.verify_signature.signee());
+					path::set_attr(tmpPath, kHTTPSignatureHeader,    data.verify_signature.signature());
+					path::rename_or_copy(tmpPath, destination);
 				}
 			}
 			else if(serverReply == 304)
@@ -217,7 +209,8 @@ namespace network
 				error = text::format("Unexpected server reply (%ld).", serverReply);
 			}
 
-			unlink(tmpPath.c_str());
+			if(!goodSignature) // If not, tmpPath has been moved to destination
+				unlink(tmpPath.c_str());
 
 			if(tbz.wait_for_tbz())
 			{

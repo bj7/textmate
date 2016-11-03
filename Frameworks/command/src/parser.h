@@ -13,7 +13,7 @@ namespace output        { enum type { replace_input = 0, replace_document, at_ca
 namespace output_format { enum type { text = 0, snippet, html, completion_list, snippet_no_auto_indent }; }
 namespace output_caret  { enum type { after_output = 0, select_output, interpolate_by_char, interpolate_by_line, heuristic }; }
 namespace output_reuse  { enum type { reuse_available = 0, reuse_none, reuse_busy, abort_and_reuse_busy }; }
-namespace auto_refresh  { enum type { never = 0, on_document_change, on_document_save }; }
+namespace auto_refresh  { enum type { never = 0, on_document_change = (1 << 0), on_document_save = (1 << 1), on_document_close = (1 << 2) }; }
 
 #ifndef NDEBUG
 inline char const* to_s (input::type const& input)
@@ -46,26 +46,26 @@ inline char const* to_s (output_caret::type const& caret)
 
 struct PUBLIC bundle_command_t
 {
-	std::string name;
+	std::string name = NULL_STR;
 	oak::uuid_t uuid;
 	scope::selector_t scope_selector;
 	std::string command;
 
-	pre_exec::type pre_exec;
+	pre_exec::type pre_exec           = pre_exec::nop;
 
-	input::type input;
-	input::type input_fallback;
-	input_format::type input_format;
+	input::type input                 = input::selection;
+	input::type input_fallback        = input::entire_document;
+	input_format::type input_format   = input_format::text;
 
-	output::type output;
-	output_format::type output_format;
-	output_caret::type output_caret;
-	output_reuse::type output_reuse;
+	output::type output               = output::replace_input;
+	output_format::type output_format = output_format::text;
+	output_caret::type output_caret   = output_caret::after_output;
+	output_reuse::type output_reuse   = output_reuse::reuse_available;
 
-	auto_refresh::type auto_refresh;
+	int auto_refresh                  = auto_refresh::never;
 
-	bool auto_scroll_output;
-	bool disable_output_auto_indent;
+	bool auto_scroll_output           = false;
+	bool disable_output_auto_indent   = false;
 };
 
 PUBLIC bundle_command_t parse_command (bundles::item_ptr bundleItem);

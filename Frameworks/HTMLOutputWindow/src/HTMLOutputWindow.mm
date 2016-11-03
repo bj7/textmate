@@ -1,8 +1,8 @@
 #import "HTMLOutputWindow.h"
 #import <OakAppKit/OakAppKit.h>
 #import <OakFoundation/NSString Additions.h>
-#import <OakSystem/process.h>
 #import <command/runner.h>
+#import <ns/ns.h>
 #import <oak/debug.h>
 
 OAK_DEBUG_VAR(HTMLOutputWindow);
@@ -15,7 +15,7 @@ OAK_DEBUG_VAR(HTMLOutputWindow);
 @end
 
 @implementation HTMLOutputWindowController
-- (id)init
+- (instancetype)init
 {
 	if(self = [super init])
 	{
@@ -25,7 +25,7 @@ OAK_DEBUG_VAR(HTMLOutputWindow);
 		self.window         = [[NSWindow alloc] initWithContentRect:rect styleMask:(NSTitledWindowMask|NSClosableWindowMask|NSResizableWindowMask|NSMiniaturizableWindowMask) backing:NSBackingStoreBuffered defer:NO];
 		self.htmlOutputView = [[OakHTMLOutputView alloc] init];
 
-		[self.window bind:NSTitleBinding toObject:self.htmlOutputView.webView withKeyPath:@"mainFrameTitle" options:nil];
+		[self.window bind:NSTitleBinding toObject:self.htmlOutputView withKeyPath:@"mainFrameTitle" options:nil];
 		[self.window bind:NSDocumentEditedBinding toObject:self.htmlOutputView withKeyPath:@"runningCommand" options:nil];
 		[self.window setContentView:self.htmlOutputView];
 		[self.window setDelegate:self];
@@ -38,6 +38,13 @@ OAK_DEBUG_VAR(HTMLOutputWindow);
 		[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(applicationDidActivate:) name:NSApplicationDidBecomeActiveNotification object:nil];
 		[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(applicationDidDeactivate:) name:NSApplicationDidResignActiveNotification object:nil];
 	}
+	return self;
+}
+
+- (instancetype)initWithIdentifier:(NSUUID*)anIdentifier
+{
+	if(self = [self init])
+		self.window.frameAutosaveName = [NSString stringWithFormat:@"HTML output for %@", anIdentifier.UUIDString];
 	return self;
 }
 
@@ -57,14 +64,6 @@ OAK_DEBUG_VAR(HTMLOutputWindow);
 	});
 }
 
-+ (HTMLOutputWindowController*)HTMLOutputWindowWithRunner:(command::runner_ptr const&)aRunner
-{
-	D(DBF_HTMLOutputWindow, bug("%s\n", to_s(aRunner->uuid()).c_str()););
-	HTMLOutputWindowController* res = [[self alloc] init];
-	[res setCommandRunner:aRunner];
-	return res;
-}
-
 - (void)showWindow:(id)sender
 {
 	self.retainedSelf = self;
@@ -76,42 +75,19 @@ OAK_DEBUG_VAR(HTMLOutputWindow);
 	[self.window close];
 }
 
-- (void)setCommandRunner:(command::runner_ptr)aRunner
-{
-	_commandRunner = aRunner;
-
-	self.window.title = [NSString stringWithCxxString:_commandRunner->name()];
-	self.window.frameAutosaveName = [NSString stringWithFormat:@"HTML output for %@", [NSString stringWithCxxString:_commandRunner->uuid()]];
-	[self.htmlOutputView loadRequest:URLRequestForCommandRunner(_commandRunner) environment:_commandRunner->environment() autoScrolls:_commandRunner->auto_scroll_output()];
-	[self showWindow:self];
-}
-
-- (BOOL)running
-{
-	return self.htmlOutputView.runningCommand;
-}
-
-- (BOOL)needsNewWebView
-{
-	return _htmlOutputView.needsNewWebView;
-}
-
 - (BOOL)windowShouldClose:(id)sender
 {
 	D(DBF_HTMLOutputWindow, bug("\n"););
-	if(!self.running)
+	if(!_htmlOutputView.isRunningCommand)
 		return YES;
 
-	NSAlert* alert = [NSAlert alertWithMessageText:@"Stop task before closing?" defaultButton:@"Stop Task" alternateButton:@"Cancel" otherButton:nil informativeTextWithFormat:@"The job that the task is performing will not be completed."];
-	OakShowAlertForWindow(alert, self.window, ^(NSInteger returnCode){
-		D(DBF_HTMLOutputWindow, bug("close %s\n", BSTR(returnCode == NSAlertDefaultReturn)););
-		if(returnCode == NSAlertDefaultReturn) /* "Stop" */
+	[_htmlOutputView stopLoadingWithUserInteraction:YES completionHandler:^(BOOL didStop){
+		if(didStop)
 		{
 			[self.window orderOut:self];
-			oak::kill_process_group_in_background(_commandRunner->process_id());
 			[self.window close];
 		}
-	});
+	}];
 	return NO;
 }
 

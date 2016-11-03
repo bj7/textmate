@@ -4,18 +4,16 @@
 #include <text/format.h>
 #include <oak/datatypes.h>
 #include <oak/debug/OakDebugLog.h>
-#include <oak/compat.h>
 #include <crash/info.h>
 
 OAK_DEBUG_VAR(IO_Exec);
 
-#define OAK_CHECK(expr) do { if((expr) != 0) { crash_reporter_info_t crashInfo(text::format("%s: %s", #expr, strerror(errno))); abort(); } } while(false)
+#define OAK_CHECK(expr) do { if((expr) != 0) { crash_reporter_info_t info("%s: %s", #expr, strerror(errno)); abort(); } } while(false)
 
 namespace io
 {
 	process_t spawn (std::vector<std::string> const& args, std::map<std::string, std::string> const& environment)
 	{
-		short const closeOnExecFlag = (oak::os_tuple() < std::make_tuple(10, 8, 0)) ? 0 : POSIX_SPAWN_CLOEXEC_DEFAULT;
 		process_t res;
 
 		int in, out, err;
@@ -34,15 +32,15 @@ namespace io
 
 			posix_spawnattr_t flags;
 			OAK_CHECK(posix_spawnattr_init(&flags));
-			OAK_CHECK(posix_spawnattr_setflags(&flags, POSIX_SPAWN_SETSIGDEF|closeOnExecFlag));
+			OAK_CHECK(posix_spawnattr_setflags(&flags, POSIX_SPAWN_SETSIGDEF|POSIX_SPAWN_CLOEXEC_DEFAULT));
 
 			char* argv[args.size() + 1];
 			std::transform(args.begin(), args.end(), &argv[0], [](std::string const& str){ return (char*)str.c_str(); });
-			argv[args.size()] = NULL;
+			argv[args.size()] = nullptr;
 
 			rc = posix_spawn(&res.pid, argv[0], &fileActions, &flags, argv, oak::c_array(environment));
 			if(rc != 0)
-				perror(text::format("posix_spawn(\"%s\")", argv[0]).c_str());
+				perrorf("io::spawn: posix_spawn(\"%s\")", argv[0]);
 
 			OAK_CHECK(posix_spawnattr_destroy(&flags));
 			OAK_CHECK(posix_spawn_file_actions_destroy(&fileActions));
@@ -85,7 +83,7 @@ namespace io
 	static std::string vexec (std::map<std::string, std::string> const& environment, std::string const& cmd, va_list args)
 	{
 		std::vector<std::string> command(1, cmd);
-		char* arg = NULL;
+		char* arg = nullptr;
 		while((arg = va_arg(args, char*)) && *arg)
 			command.push_back(arg);
 		va_end(args);
@@ -111,7 +109,7 @@ namespace io
 		dispatch_group_async(group, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
 			int status = 0;
 			if(waitpid(process.pid, &status, 0) != process.pid)
-				perror("waitpid");
+				perror("io::vexec: waitpid");
 			else if(!WIFEXITED(status))
 				fprintf(stderr, "*** abnormal exit (%d) from ‘%s’\n", status, text::join(command, " ").c_str());
 			else if(WEXITSTATUS(status) != 0)
@@ -122,9 +120,7 @@ namespace io
 
 		dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
 		dispatch_release(group);
-
 		D(DBF_IO_Exec, if(!error.empty()) bug("error from command: “%s”\n", error.c_str()););
-
 		return success ? output : NULL_STR;
 	}
 

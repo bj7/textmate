@@ -2,10 +2,12 @@
 #import "add_to_buffer.h"
 #import <OakFoundation/NSString Additions.h>
 #import <oak/debug.h>
-#import <document/collection.h>
+#import <document/OakDocument.h>
+#import <document/OakDocumentController.h>
 #import <text/utf8.h>
 #import <ns/ns.h>
 #import <cf/run_loop.h>
+#import <io/exec.h>
 
 @interface HOJSShellCommand : NSObject
 - (id)initShellCommand:(NSString*)aCommand withEnvironment:(const std::map<std::string, std::string>&)someEnvironment andExitHandler:(id)aHandler;
@@ -75,17 +77,17 @@ OAK_DEBUG_VAR(HTMLOutput_JSBridge);
 
 - (void)setIsBusy:(BOOL)flag
 {
-	[_delegate setIsBusy:flag];
+	[_delegate setBusy:flag];
 }
 
 - (void)setProgress:(id)newProgress;
 {
-	[(id <HOJSBridgeDelegate>)_delegate setProgress:[newProgress floatValue]];
+	[_delegate setProgress:[newProgress floatValue]];
 }
 
 - (double)progress
 {
-	return [(id <HOJSBridgeDelegate>)_delegate progress];
+	return [_delegate progress];
 }
 
 - (void)log:(NSString*)aMessage
@@ -100,7 +102,8 @@ OAK_DEBUG_VAR(HTMLOutput_JSBridge);
 		range = text::pos_t([options intValue]-1, 0);
 	else if([options isKindOfClass:[NSString class]])
 		range = to_s(options);
-	document::show(document::create(to_s(path)), document::kCollectionAny, range);
+	if(OakDocument* doc = [OakDocumentController.sharedInstance documentWithPath:path])
+		[OakDocumentController.sharedInstance showDocument:doc andSelect:range inProject:nil bringToFront:YES];
 }
 
 - (id)system:(NSString*)aCommand handler:(id)aHandler
@@ -187,7 +190,7 @@ OAK_DEBUG_VAR(HTMLOutput_JSShellCommand);
 			dispatch_group_async(group, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
 				int result = 0;
 				if(waitpid(process.pid, &result, 0) != process.pid)
-					perror("waitpid");
+					perror("HOJSShellCommand: waitpid");
 				process.pid = -1;
 				dispatch_sync(queue, ^{
 					self.status = WIFEXITED(result) ? WEXITSTATUS(result) : -1;
@@ -218,8 +221,6 @@ OAK_DEBUG_VAR(HTMLOutput_JSShellCommand);
 					}
 				}
 			}
-
-			dispatch_release(group);
 		}
 	}
 	return self;

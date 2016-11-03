@@ -3,15 +3,15 @@
 
 namespace ng
 {
-	void marks_t::replace (buffer_t* buffer, size_t from, size_t to, std::string const& str)
+	void marks_t::replace (buffer_t* buffer, size_t from, size_t to, size_t len)
 	{
 		for(auto& m : _marks)
 		{
 			tree_t::iterator it = m.second.upper_bound(to);
 			std::string preserveMark = it != m.second.begin() && from < (--it)->first && it->first <= to ? it->second : NULL_STR;
-			m.second.replace(from, to, str.size(), false);
+			m.second.replace(from, to, len, false);
 			if(preserveMark != NULL_STR)
-				m.second.set(from + str.size(), preserveMark);
+				m.second.set(from + len, preserveMark);
 		}
 	}
 
@@ -79,6 +79,9 @@ namespace ng
 			auto it = m->second.lower_bound(index);
 			candidates.push_back(*(--(it == m->second.begin() ? m->second.end() : it)));
 		}
+
+		if(candidates.empty())
+			return std::make_pair(0, NULL_STR);
 
 		std::sort(candidates.begin(), candidates.end());
 		auto it = std::lower_bound(candidates.begin(), candidates.end(), index, [](std::pair<size_t, std::string> const& mark, size_t index){ return mark.first < index; });

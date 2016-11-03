@@ -6,7 +6,7 @@
 #import <BundleEditor/BundleEditor.h>
 #import <BundlesManager/BundlesManager.h>
 #import <CrashReporter/CrashReporter.h>
-#import <DocumentWindow/DocumentController.h>
+#import <DocumentWindow/DocumentWindowController.h>
 #import <Find/Find.h>
 #import <CommitWindow/CommitWindow.h>
 #import <OakAppKit/NSMenuItem Additions.h>
@@ -19,45 +19,56 @@
 #import <Preferences/Preferences.h>
 #import <Preferences/TerminalPreferences.h>
 #import <SoftwareUpdate/SoftwareUpdate.h>
-#import <document/collection.h>
+#import <document/OakDocument.h>
+#import <document/OakDocumentController.h>
 #import <bundles/query.h>
 #import <io/path.h>
+#import <regexp/glob.h>
 #import <network/tbz.h>
 #import <ns/ns.h>
-#import <license/license.h>
+#import <license/LicenseManager.h>
+#import <settings/settings.h>
 #import <oak/debug.h>
 #import <oak/compat.h>
 #import <oak/oak.h>
 #import <scm/scm.h>
 #import <text/types.h>
 
+#if !defined(MAC_OS_X_VERSION_10_12) || (MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_12)
+@interface NSWindow (Sierra)
++ (void)setAllowsAutomaticWindowTabbing:(BOOL)flag;
+@end
+#endif
+
 OAK_DEBUG_VAR(AppController);
 
-void OakOpenDocuments (NSArray* paths)
+void OakOpenDocuments (NSArray* paths, BOOL treatFilePackageAsFolder)
 {
-	std::vector<document::document_ptr> documents;
+	NSArray* const bundleExtensions = @[ @"tmbundle", @"tmcommand", @"tmdragcommand", @"tmlanguage", @"tmmacro", @"tmpreferences", @"tmsnippet", @"tmtheme" ];
+
+	NSMutableArray<OakDocument*>* documents = [NSMutableArray array];
 	NSMutableArray* itemsToInstall = [NSMutableArray array];
 	NSMutableArray* plugInsToInstall = [NSMutableArray array];
-	BOOL enableInstallHandler = ([NSEvent modifierFlags] & NSAlternateKeyMask) == 0;
+	BOOL enableInstallHandler = treatFilePackageAsFolder == NO && ([NSEvent modifierFlags] & NSAlternateKeyMask) == 0;
 	for(NSString* path in paths)
 	{
-		static auto const tmItemExtensions = new std::set<std::string>{ "tmbundle", "tmcommand", "tmdragcommand", "tmlanguage", "tmmacro", "tmpreferences", "tmsnippet", "tmtheme" };
-		std::string const pathExt = to_s([[path pathExtension] lowercaseString]);
-		if(enableInstallHandler && tmItemExtensions->find(pathExt) != tmItemExtensions->end())
+		BOOL isDirectory = NO;
+		NSString* pathExt = [[path pathExtension] lowercaseString];
+		if(enableInstallHandler && [bundleExtensions containsObject:pathExt])
 		{
 			[itemsToInstall addObject:path];
 		}
-		else if(enableInstallHandler && pathExt == "tmplugin")
+		else if(enableInstallHandler && [pathExt isEqualToString:@"tmplugin"])
 		{
 			[plugInsToInstall addObject:path];
 		}
-		else if(path::is_directory(to_s(path)))
+		else if([[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDirectory] && isDirectory)
 		{
-			document::show_browser(to_s(path));
+			[OakDocumentController.sharedInstance showFileBrowserAtPath:path];
 		}
 		else
 		{
-			documents.push_back(document::create(to_s(path)));
+			[documents addObject:[OakDocumentController.sharedInstance documentWithPath:path]];
 		}
 	}
 
@@ -67,14 +78,14 @@ void OakOpenDocuments (NSArray* paths)
 	for(NSString* path in plugInsToInstall)
 		[[TMPlugInController sharedInstance] installPlugInAtPath:path];
 
-	document::show(documents);
+	[OakDocumentController.sharedInstance showDocuments:documents];
 }
 
 BOOL HasDocumentWindow (NSArray* windows)
 {
 	for(NSWindow* window in windows)
 	{
-		if([window.delegate isKindOfClass:[DocumentController class]])
+		if([window.delegate isKindOfClass:[DocumentWindowController class]])
 			return YES;
 	}
 	return NO;
@@ -93,7 +104,7 @@ BOOL HasDocumentWindow (NSArray* windows)
 		_currentResponderIsOakTextView = flag;
 
 		NSMenu* mainMenu = [NSApp mainMenu];
-		NSMenu* goMenu   = [[mainMenu itemWithTitle:@"Go"] submenu];
+		NSMenu* goMenu   = [[mainMenu itemWithTitle:@"File Browser"] submenu];
 		NSMenu* textMenu = [[mainMenu itemWithTitle:@"Text"] submenu];
 
 		NSMenuItem* backMenuItem       = [goMenu itemWithTitle:@"Back"];
@@ -152,18 +163,15 @@ BOOL HasDocumentWindow (NSArray* windows)
 	if([currentDate laterDate:warningDate] == warningDate)
 		return (void)[NSTimer scheduledTimerWithTimeInterval:7 * kSecondsPerDay target:self selector:@selector(checkExpirationDate:) userInfo:nil repeats:NO];
 
-	for(auto owner : license::find_all())
-	{
-		if(license::is_valid(license::decode(license::find(owner)), owner))
-			return;
-	}
+	if(LicenseManager.sharedInstance.owner != nil)
+		return;
 
 	if([currentDate laterDate:expirationDate] == currentDate)
 	{
 		NSInteger choice = NSRunAlertPanel(@"TextMate is Outdated!", @"You can get a new version from https://macromates.com/download.", @"Visit Website", @"Enter License", nil);
 		if(choice == NSAlertAlternateReturn) // "Enter License"
 		{
-			[[RegistrationWindowController sharedInstance] showWindow:self];
+			[LicenseManager.sharedInstance showAddLicenseWindow:self];
 			[NSTimer scheduledTimerWithTimeInterval:1 * kSecondsPerDay target:self selector:@selector(checkExpirationDate:) userInfo:nil repeats:NO];
 		}
 		else
@@ -171,7 +179,7 @@ BOOL HasDocumentWindow (NSArray* windows)
 			if(choice == NSAlertDefaultReturn) // "Visit Website"
 				[[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://macromates.com/download"]];
 
-			[DocumentController disableSessionSave];
+			[DocumentWindowController disableSessionSave];
 			[NSApp terminate:self];
 		}
 	}
@@ -202,6 +210,7 @@ BOOL HasDocumentWindow (NSArray* windows)
 	settings_t::set_default_settings_path([[[NSBundle mainBundle] pathForResource:@"Default" ofType:@"tmProperties"] fileSystemRepresentation]);
 	settings_t::set_global_settings_path(path::join(path::home(), "Library/Application Support/TextMate/Global.tmProperties"));
 
+	// LEGACY location used prior to 2.0-alpha.9513
 	std::string const src = path::join(path::home(), "Library/Application Support/TextMate/project-state.db");
 	std::string const dst = path::join(path::home(), "Library/Application Support/TextMate/RecentProjects.db");
 	if(path::exists(src) && !path::exists(dst))
@@ -212,6 +221,21 @@ BOOL HasDocumentWindow (NSArray* windows)
 		@"WebKitDeveloperExtras"    : @YES,
 	}];
 	RegisterDefaults();
+
+	// LEGACY format used prior to 2.0-beta.12.23
+	if(NSDictionary* volumeSettings = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"volumeSettings"])
+	{
+		for(NSString* pathPrefix in volumeSettings)
+		{
+			id setting = volumeSettings[pathPrefix][@"extendedAttributes"];
+			if(setting && [setting boolValue] == NO)
+			{
+				std::string const glob = path::glob_t::escape(to_s(pathPrefix)) + "**";
+				settings_t::set(kSettingsDisableExtendedAttributesKey, true, NULL_STR, glob);
+			}
+		}
+		[[NSUserDefaults standardUserDefaults] removeObjectForKey:@"volumeSettings"];
+	}
 
 	[[TMPlugInController sharedInstance] loadAllPlugIns:nil];
 
@@ -276,8 +300,8 @@ BOOL HasDocumentWindow (NSArray* windows)
 
 		if(restoreSession)
 		{
-			path::set_content(prematureTerminationDuringRestore, "");
-			[DocumentController restoreSession];
+			close(open(prematureTerminationDuringRestore.c_str(), O_CREAT|O_TRUNC|O_WRONLY|O_CLOEXEC));
+			[DocumentWindowController restoreSession];
 		}
 		unlink(prematureTerminationDuringRestore.c_str());
 	}
@@ -292,6 +316,9 @@ BOOL HasDocumentWindow (NSArray* windows)
 - (void)applicationDidFinishLaunching:(NSNotification*)aNotification
 {
 	D(DBF_AppController, bug("\n"););
+
+	if([NSWindow respondsToSelector:@selector(setAllowsAutomaticWindowTabbing:)]) // MAC_OS_X_VERSION_10_12
+		NSWindow.allowsAutomaticWindowTabbing = NO;
 
 	if(!HasDocumentWindow([NSApp orderedWindows]))
 	{
@@ -317,7 +344,6 @@ BOOL HasDocumentWindow (NSArray* windows)
 
 	[TerminalPreferences updateMateIfRequired];
 	[AboutWindowController showChangesIfUpdated];
-	[[BundlesManager sharedInstance] setAutoUpdateBundles:YES];
 
 	[[CrashReporter sharedInstance] applicationDidFinishLaunching:aNotification];
 	[[CrashReporter sharedInstance] postNewCrashReportsToURLString:[NSString stringWithFormat:@"%s/crashes", REST_API]];
@@ -361,14 +387,16 @@ BOOL HasDocumentWindow (NSArray* windows)
 - (IBAction)orderFrontFindPanel:(id)sender
 {
 	D(DBF_AppController, bug("\n"););
+	Find* find = [Find sharedInstance];
 	NSInteger mode = [sender respondsToSelector:@selector(tag)] ? [sender tag] : find_tags::in_document;
 	switch(mode)
 	{
-		case find_tags::in_document:  return [[Find sharedInstance] showFindWindowFor:FFSearchInDocument];
-		case find_tags::in_selection: return [[Find sharedInstance] showFindWindowFor:FFSearchInSelection];
-		case find_tags::in_project:   return [[Find sharedInstance] showFindWindowFor:NSHomeDirectory()];
-		case find_tags::in_folder:    return [[Find sharedInstance] showFolderSelectionPanel:self];
+		case find_tags::in_document:  find.searchTarget = FFSearchTargetDocument;  break;
+		case find_tags::in_selection: find.searchTarget = FFSearchTargetSelection; break;
+		case find_tags::in_project:   find.searchTarget = FFSearchTargetProject;   break;
+		case find_tags::in_folder:    return [find showFolderSelectionPanel:self]; break;
 	}
+	[find showWindow:self];
 }
 
 - (IBAction)orderFrontGoToLinePanel:(id)sender;
@@ -384,6 +412,11 @@ BOOL HasDocumentWindow (NSArray* windows)
 	D(DBF_AppController, bug("\n"););
 	[goToLinePanel orderOut:self];
 	[NSApp sendAction:@selector(selectAndCenter:) to:nil from:[goToLineTextField stringValue]];
+}
+
+- (IBAction)performSoftwareUpdateCheck:(id)sender
+{
+	[[SoftwareUpdate sharedInstance] checkForUpdates:self];
 }
 
 - (IBAction)showPreferences:(id)sender
@@ -410,7 +443,7 @@ BOOL HasDocumentWindow (NSArray* windows)
 	NSMutableArray* paths = [NSMutableArray array];
 	for(id item in [sender selectedItems])
 		[paths addObject:[item objectForKey:@"path"]];
-	OakOpenDocuments(paths);
+	OakOpenDocuments(paths, YES);
 }
 
 // =======================
@@ -427,11 +460,11 @@ BOOL HasDocumentWindow (NSArray* windows)
 	chooser.scope        = textView ? [textView scopeContext] : scope::wildcard;
 	chooser.hasSelection = [textView hasSelection];
 
-	if(DocumentController* controller = [NSApp targetForAction:@selector(selectedDocument)])
+	if(DocumentWindowController* controller = [NSApp targetForAction:@selector(selectedDocument)])
 	{
-		document::document_ptr doc = controller.selectedDocument;
-		chooser.path      = doc ? [NSString stringWithCxxString:doc->path()] : nil;
-		chooser.directory = doc && doc->path() != NULL_STR ? [NSString stringWithCxxString:path::parent(doc->path())] : controller.untitledSavePath;
+		OakDocument* doc = controller.selectedDocument;
+		chooser.path      = doc.path;
+		chooser.directory = [doc.path stringByDeletingLastPathComponent] ?: doc.directory;
 	}
 	else
 	{
@@ -444,12 +477,8 @@ BOOL HasDocumentWindow (NSArray* windows)
 
 - (void)bundleItemChooserDidSelectItems:(id)sender
 {
-	for(NSDictionary* item in [sender selectedItems])
-	{
-		if(OakIsAlternateKeyOrMouseEvent())
-				[[BundleEditor sharedInstance] revealBundleItem:bundles::lookup(to_s([item objectForKey:@"uuid"]))];
-		else	[NSApp sendAction:@selector(performBundleItemWithUUIDString:) to:nil from:[item objectForKey:@"uuid"]];
-	}
+	for(id item in [sender selectedItems])
+		[NSApp sendAction:@selector(performBundleItemWithUUIDStringFrom:) to:nil from:@{ @"representedObject" : [item valueForKey:@"uuid"] }];
 }
 
 // ===========================
@@ -490,11 +519,9 @@ BOOL HasDocumentWindow (NSArray* windows)
 	}
 	else if([item action] == @selector(performBundleItemWithUUIDStringFrom:))
 	{
-		if(bundles::item_ptr bundleItem = bundles::lookup(to_s(item.representedObject)))
-		{
-			if(id textView = [NSApp targetForAction:@selector(hasSelection)])
-				[item updateTitle:[NSString stringWithCxxString:name_with_selection(bundleItem, [textView hasSelection])]];
-		}
+		id menuItemValidator = [NSApp.keyWindow.delegate respondsToSelector:@selector(performBundleItem:)] ? NSApp.keyWindow.delegate : [NSApp targetForAction:@selector(performBundleItem:)];
+		if(menuItemValidator != self && [menuItemValidator respondsToSelector:@selector(validateMenuItem:)])
+			enabled = [menuItemValidator validateMenuItem:item];
 	}
 	return enabled;
 }
@@ -504,16 +531,15 @@ BOOL HasDocumentWindow (NSArray* windows)
 	ASSERT([sender respondsToSelector:@selector(selectedItems)]);
 	ASSERT([[sender selectedItems] count] == 1);
 
-	if(NSString* uuid = [[[sender selectedItems] lastObject] objectForKey:@"uuid"])
+	if(NSString* uuid = [[[sender selectedItems] lastObject] valueForKey:@"uuid"])
 	{
 		[[BundleEditor sharedInstance] revealBundleItem:bundles::lookup(to_s(uuid))];
 	}
-	else if(NSString* path = [[[sender selectedItems] lastObject] objectForKey:@"file"])
+	else if(NSString* path = [[[sender selectedItems] lastObject] valueForKey:@"file"])
 	{
-		document::document_ptr doc = document::create(to_s(path));
-		if(NSString* line = [[[sender selectedItems] lastObject] objectForKey:@"line"])
-			doc->set_selection(to_s(line));
-		document::show(doc);
+		OakDocument* doc = [OakDocumentController.sharedInstance documentWithPath:path];
+		NSString* line = [[[sender selectedItems] lastObject] valueForKey:@"line"];
+		[OakDocumentController.sharedInstance showDocument:doc andSelect:(line ? text::pos_t(to_s(line)) : text::pos_t::undefined) inProject:nil bringToFront:YES];
 	}
 }
 

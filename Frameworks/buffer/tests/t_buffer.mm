@@ -32,7 +32,7 @@ void benchmark_insert_50_mb ()
 	std::string tmp(32*1024, '\0');
 	for(size_t i = 0; i < tmp.size(); ++i)
 		tmp[i] = (i % 0x61) == 0x60 ? '\n' : 0x20 + (i % 0x61);
-	std::random_shuffle(tmp.begin(), tmp.end());
+	oak::random_shuffle(tmp.begin(), tmp.end());
 
 	ng::buffer_t buf;
 	size_t cnt = 50*1024*1024 / tmp.size();
@@ -55,7 +55,7 @@ void test_subset_replace ()
 {
 	struct callback_t : ng::callback_t
 	{
-		void will_replace (size_t from, size_t to, std::string const& str) { actual.push_back(str); }
+		void will_replace (size_t from, size_t to, char const* buf, size_t len) { actual.emplace_back(buf, len); }
 		std::vector<std::string> actual;
 	};
 
@@ -100,8 +100,8 @@ void test_xml_markup ()
 	ng::buffer_t buf;
 	buf.insert(0, "Hello <World> & Fun");
 
-	OAK_ASSERT_EQ(to_xml(buf), "<text>Hello &lt;World> &amp; Fun</text>");
-	OAK_ASSERT_EQ(to_xml(buf, 6, 13), "<text>&lt;World></text>");
+	OAK_ASSERT_EQ(buf.xml_substr(), "<text>Hello &lt;World> &amp; Fun</text>");
+	OAK_ASSERT_EQ(buf.xml_substr(6, 13), "<text>&lt;World></text>");
 }
 
 void test_spelling ()

@@ -8,7 +8,6 @@
 #import <SoftwareUpdate/SoftwareUpdate.h>
 
 // kUserDefaultsLastSoftwareUpdateCheckKey
-// kUserDefaultsLastBundleUpdateCheckKey
 
 @interface SoftwareUpdatePreferences ()
 @property (nonatomic) BOOL isChecking;
@@ -35,7 +34,6 @@
 
 		self.defaultsProperties = @{
 			@"disableSoftwareUpdates" : kUserDefaultsDisableSoftwareUpdatesKey,
-			@"disableBundleUpdates"   : kUserDefaultsDisableBundleUpdatesKey,
 			@"disableCrashReports"    : kUserDefaultsDisableCrashReportingKey,
 			@"softwareUpdateChannel"  : kUserDefaultsSoftwareUpdateChannelKey,
 			@"askBeforeDownloading"   : kUserDefaultsAskBeforeUpdatingKey,
@@ -44,11 +42,6 @@
 		};
 	}
 	return self;
-}
-
-- (IBAction)performSoftwareUpdateCheck:(id)sender
-{
-	[[SoftwareUpdate sharedInstance] checkForUpdates:self];
 }
 
 - (NSString*)lastCheck

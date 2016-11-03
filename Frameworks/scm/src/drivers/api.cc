@@ -3,7 +3,9 @@
 #include <text/case.h>
 #include <text/format.h>
 #include <text/tokenize.h>
+#include <text/trim.h>
 #include <io/path.h>
+#include <io/exec.h>
 #include <oak/oak.h>
 
 namespace scm
@@ -36,7 +38,18 @@ namespace scm
 		for(auto const& path : candidates)
 		{
 			if(path::is_executable(path))
+			{
+				if(path == "/usr/bin/git" || path == "/usr/bin/svn")
+				{
+					std::string const xcodePath = io::exec("/usr/bin/xcode-select", "-p", nullptr);
+					if(!path::is_directory(text::trim(xcodePath, "\n")))
+					{
+						fprintf(stderr, "*** ignore ‘%s’ because it appears to be a shim and Xcode is not installed\n", path.c_str());
+						continue;
+					}
+				}
 				return path;
+			}
 		}
 
 		return NULL_STR;
@@ -72,7 +85,7 @@ namespace scm
 	driver_t const* driver_for_path (std::string const& path, std::string* wcPath)
 	{
 		if(!path::is_absolute(path))
-			return NULL;
+			return nullptr;
 
 		static driver_t* const drivers[] = { git_driver(), hg_driver(), p4_driver(), svn_driver() };
 		for(std::string cwd = path; cwd != "/"; cwd = path::parent(cwd))
@@ -87,7 +100,7 @@ namespace scm
 				}
 			}
 		}
-		return NULL;
+		return nullptr;
 	}
 
 } /* scm */

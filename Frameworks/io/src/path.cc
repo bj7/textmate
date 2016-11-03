@@ -203,14 +203,18 @@ namespace path
 
 	size_t rank (std::string const& path, std::string const& ext)
 	{
-		size_t rank = 0;
-		if(path.rfind(ext) == path.size() - ext.size())
+		if(path.size() >= ext.size() && path.compare(path.size() - ext.size(), ext.size(), ext) == 0)
 		{
+			if(path.size() == ext.size())
+				return ext.size();
+
 			char ch = path[path.size() - ext.size() - 1];
-			if(ch == '.' || ch == '/' || ch == '_')
-				rank = std::max(path.size() - ext.size(), rank);
+			if(ch == '.' || ch == '_')
+				return ext.size() + 1;
+			else if(ch == '/')
+				return ext.size();
 		}
-		return rank;
+		return 0;
 	}
 
 	std::string join (std::string const& base, std::string const& path)
@@ -228,7 +232,7 @@ namespace path
 		if(!path.empty() && path[0] == '/')
 		{
 			std::string p = normalize(path);
-			if(p != "/.." && p.find("/../") != 0)
+			if(p != "/.." && !oak::has_prefix(p, "/../"))
 				return true;
 		}
 		return false;
@@ -341,7 +345,7 @@ namespace path
 				else
 				{
 					std::string errStr = len == -1 ? strerror(errno) : text::format("Result outside allowed range %zd", len);
-					fprintf(stderr, "*** readlink(‘%s’) failed: %s\n", path.c_str(), errStr.c_str());
+					fprintf(stderr, "readlink(\"%s\"): %s\n", path.c_str(), errStr.c_str());
 				}
 			}
 			else if(S_ISREG(buf.st_mode))
@@ -394,7 +398,7 @@ namespace path
 		CFURLRef url = CFURLCreateFromFileSystemRepresentation(kCFAllocatorDefault, (UInt8 const*)path.data(), path.size(), is_directory(path));
 		if(!url) return false;
 		CFBooleanRef pathIsLocal;
-		bool ok = CFURLCopyResourcePropertyForKey(url, kCFURLVolumeIsLocalKey, &pathIsLocal, NULL);
+		bool ok = CFURLCopyResourcePropertyForKey(url, kCFURLVolumeIsLocalKey, &pathIsLocal, nullptr);
 		CFRelease(url);
 		if(!ok) return false;
 		return (pathIsLocal == kCFBooleanTrue);
@@ -598,7 +602,7 @@ namespace path
 	std::string system_display_name (std::string const& path)
 	{
 		std::string res = name(path);
-		if(path.find("/Volumes/") == 0 || path.find("/home/") == 0)
+		if(oak::has_prefix(path, "/Volumes/") || oak::has_prefix(path, "/home/"))
 			return res;
 
 		if(CFURLRef url = CFURLCreateFromFileSystemRepresentation(kCFAllocatorDefault, (UInt8 const*)path.data(), path.size(), false))
@@ -760,7 +764,7 @@ namespace path
 	{
 		std::string const& path = resolve(p);
 
-		ssize_t size = getxattr(path.c_str(), attr.c_str(), NULL, 0, 0, 0);
+		ssize_t size = getxattr(path.c_str(), attr.c_str(), nullptr, 0, 0, 0);
 		if(size <= 0)
 			return NULL_STR;
 
@@ -783,7 +787,7 @@ namespace path
 		int fd = open(path.c_str(), O_RDONLY|O_CLOEXEC);
 		if(fd != -1)
 		{
-			ssize_t listSize = flistxattr(fd, NULL, 0, 0);
+			ssize_t listSize = flistxattr(fd, nullptr, 0, 0);
 			if(listSize > 0)
 			{
 				char mem[listSize];
@@ -792,18 +796,18 @@ namespace path
 					size_t i = 0;
 					while(i < listSize)
 					{
-						ssize_t size = fgetxattr(fd, mem + i, NULL, 0, 0, 0);
+						ssize_t size = fgetxattr(fd, mem + i, nullptr, 0, 0, 0);
 						if(size > 0)
 						{
 							std::string value(size, '\0');
 							if(fgetxattr(fd, mem + i, &value.front(), value.size(), 0, 0) == size)
 								res.emplace(mem + i, value);
 							else
-								perror(("fgetxattr(" + path + ", " + (mem+i) + ")").c_str());
+								perrorf("path::attributes: fgetxattr(\"%s\", \"%s\")", path.c_str(), mem + i);
 						}
 						else if(size == -1)
 						{
-							perror(("fgetxattr(" + path + ", " + (mem+i) + ")").c_str());
+							perrorf("path::attributes: fgetxattr(\"%s\", \"%s\")", path.c_str(), mem + i);
 						}
 						i += strlen(mem + i) + 1;
 					}
@@ -811,13 +815,13 @@ namespace path
 			}
 			else if(listSize == -1)
 			{
-				perror(("flistxattr(" + path + ")").c_str());
+				perrorf("path::attributes: flistxattr(\"%s\")", path.c_str());
 			}
 			close(fd);
 		}
 		else
 		{
-			perror(("open(" + path + ")").c_str());
+			perrorf("path::attributes: open(\"%s\")", path.c_str());
 		}
 		return res;
 	}
@@ -845,14 +849,16 @@ namespace path
 					// fremovexattr() on AFP for non-existing attributes gives us EINVAL
 					// fsetxattr() on Samba saving to ext4 via virtual machine gives us ENOENT
 					// sshfs with ‘-o noappledouble’ will return ENOATTR or EPERM
-					perror((pair.second == NULL_STR ? text::format("fremovexattr(%d, \"%s\")", fd, pair.first.c_str()) : text::format("fsetxattr(%d, %s, \"%s\")", fd, pair.first.c_str(), pair.second.c_str())).c_str());
+					if(pair.second == NULL_STR)
+							perrorf("path::set_attributes: fremovexattr(\"%s\", \"%s\")", path.c_str(), pair.first.c_str());
+					else	perrorf("path::set_attributes: fsetxattr(\"%s\", \"%s\", \"%s\")", path.c_str(), pair.first.c_str(), pair.second.c_str());
 				}
 			}
 			close(fd);
 		}
 		else
 		{
-			perror("open");
+			perrorf("path::set_attributes: open(\"%s\")", path.c_str());
 		}
 		return res;
 	}
@@ -903,25 +909,34 @@ namespace path
 		if(path != NULL_STR && !exists(path))
 		{
 			make_dir(parent(path));
-			if(mkdir(path.c_str(), S_IRUSR|S_IWUSR|S_IXUSR|S_IRGRP|S_IWGRP|S_IXGRP|S_IROTH|S_IWOTH|S_IXOTH) == -1)
-				perror(text::format("mkdir(“%s”)", path.c_str()).c_str());
+			if(mkdir(path.c_str(), S_IRWXU|S_IRWXG|S_IRWXO) == -1)
+				perrorf("path::make_dir: mkdir(\"%s\")", path.c_str());
 		}
 		return exists(path) && info(resolve(path)) & flag::directory;
 	}
 
-	void touch_tree (std::string const& basePath)
+	bool rename_or_copy (std::string const& cppSrc, std::string const& cppDst, bool createParent)
 	{
-		lutimes(basePath.c_str(), NULL);
+		char const* const src = cppSrc.c_str();
+		char const* const dst = cppDst.c_str();
 
-		for(auto const& entry : path::entries(basePath))
+		if(createParent && !make_dir(parent(cppDst)))
+			return false;
+
+		if(::rename(src, dst) == 0)
+			return true;
+
+		if(errno == EXDEV)
 		{
-			std::string path = path::join(basePath, entry->d_name);
-			int type = entry->d_type;
-			if(type == DT_DIR)
-				touch_tree(path);
-			if(type == DT_LNK || type == DT_REG)
-				lutimes(path.c_str(), NULL);
+			if(copyfile(src, dst, nullptr, COPYFILE_ALL | COPYFILE_MOVE | COPYFILE_UNLINK) == 0)
+				return true;
+			perrorf("copyfile(\"%s\", \"%s\", nullptr, COPYFILE_ALL | COPYFILE_MOVE | COPYFILE_UNLINK)", src, dst);
 		}
+		else
+		{
+			perrorf("rename(\"%s\", \"%s\")", src, dst);
+		}
+		return false;
 	}
 
 	// ===============
@@ -949,7 +964,7 @@ namespace path
 	std::string cwd ()
 	{
 		std::string res = NULL_STR;
-		if(char* cwd = getcwd(NULL, (size_t)-1))
+		if(char* cwd = getcwd(nullptr, (size_t)-1))
 		{
 			res = cwd;
 			free(cwd);
@@ -966,7 +981,7 @@ namespace path
 			std::string message = text::format("Unable to obtain basic system information such as your home folder.\n\ngetpwuid(%d): %s", getuid(), errStr);
 
 			CFOptionFlags responseFlags;
-			CFUserNotificationDisplayAlert(0 /* timeout */, kCFUserNotificationStopAlertLevel, NULL /* iconURL */, NULL /* soundURL */, NULL /* localizationURL */, CFSTR("Missing User Database"), cf::wrap(message), CFSTR("Retry"), CFSTR("Show Radar Entry"), nil /* otherButtonTitle */, &responseFlags);
+			CFUserNotificationDisplayAlert(0 /* timeout */, kCFUserNotificationStopAlertLevel, nullptr /* iconURL */, nullptr /* soundURL */, nullptr /* localizationURL */, CFSTR("Missing User Database"), cf::wrap(message), CFSTR("Retry"), CFSTR("Show Radar Entry"), nil /* otherButtonTitle */, &responseFlags);
 
 			if((responseFlags & 0x3) == kCFUserNotificationDefaultResponse)
 			{
@@ -974,12 +989,12 @@ namespace path
 			}
 			else if((responseFlags & 0x3) == kCFUserNotificationAlternateResponse)
 			{
-				if(CFURLRef url = CFURLCreateWithString(kCFAllocatorDefault, cf::wrap("http://openradar.appspot.com/10261043"), NULL))
+				if(CFURLRef url = CFURLCreateWithString(kCFAllocatorDefault, cf::wrap("http://openradar.appspot.com/10261043"), nullptr))
 				{
 					if(CFMutableArrayRef urls = CFArrayCreateMutable(kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks))
 					{
 						CFArrayAppendValue(urls, url);
-						LSOpenURLsWithRole(urls, kLSRolesViewer, NULL, NULL, NULL, 0);
+						LSOpenURLsWithRole(urls, kLSRolesViewer, nullptr, nullptr, nullptr, 0);
 						CFRelease(urls);
 					}
 					CFRelease(url);
@@ -996,7 +1011,7 @@ namespace path
 
 	static std::string system_directory (int name, std::string const& file, std::string const& content)
 	{
-		std::string str(128, ' ');
+		std::string str(128, '\0');
 		size_t len = confstr(name, &str[0], str.size());
 		if(0 < len && len < 128) // if length is 128 the path was truncated and unusable
 				str.resize(len - 1);
@@ -1014,7 +1029,7 @@ namespace path
 				fchmod(fd, S_IRWXU);
 				if(write(fd, content.data(), content.size()) != content.size())
 				{
-					perror("write");
+					perror("path::system_directory: write");
 					unlink(str.c_str());
 					str = NULL_STR;
 				}

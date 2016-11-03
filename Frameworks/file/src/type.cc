@@ -24,11 +24,6 @@ static std::string file_type_from_grammars (std::vector<bundles::item_ptr> const
 	return NULL_STR;
 }
 
-static std::string file_type_from_path (std::string const& path)
-{
-	return path != NULL_STR ? file_type_from_grammars(bundles::grammars_for_path(path)) : NULL_STR;
-}
-
 static size_t lines_matched_by_regexp (std::string const& pattern)
 {
 	size_t newlines = 1;
@@ -58,26 +53,18 @@ _InputIter first_n_lines (_InputIter const& first, _InputIter const& last, size_
 	return eol;
 }
 
-static std::string file_type_from_bytes (io::bytes_ptr const& bytes)
+static std::vector<bundles::item_ptr> grammars_for_path (std::string const& path)
 {
-	if(!bytes)
-		return NULL_STR;
-
 	std::multimap<ssize_t, bundles::item_ptr> ordering;
 	for(auto const& item : bundles::query(bundles::kFieldAny, NULL_STR, scope::wildcard, bundles::kItemTypeGrammar))
 	{
-		for(auto const& pattern : item->values_for_field(bundles::kFieldGrammarFirstLineMatch))
+		for(auto const& ext : item->values_for_field(bundles::kFieldGrammarExtension))
 		{
-			char const* first = bytes->begin();
-			char const* last  = bytes->end();
-			if(pattern.find("(?m)") == std::string::npos)
-				last = first_n_lines(first, last, lines_matched_by_regexp(pattern));
-
-			if(regexp::match_t const& m = regexp::search(pattern, first, last))
-				ordering.emplace(-m.end(), item);
+			if(ssize_t rank = path::rank(path, ext))
+				ordering.emplace(-rank, item);
 		}
 	}
-	return ordering.empty() ? NULL_STR : file_type_from_grammars(std::vector<bundles::item_ptr>(1, ordering.begin()->second));
+	return ordering.empty() ? std::vector<bundles::item_ptr>() : std::vector<bundles::item_ptr>{ ordering.begin()->second };
 }
 
 static bool unknown_file_type (std::string const& fileType)
@@ -100,11 +87,11 @@ static std::string find_file_type (std::string const& path, io::bytes_ptr const&
 
 	// check if a grammar recognize the content (e.g. #!/usr/bin/ruby → Ruby)
 	if(unknown_file_type(res) && bytes)
-		res = file_type_from_bytes(bytes);
+		res = file::type_from_bytes(bytes);
 
 	// check if a grammar recognize the path extension (.git/config → Git Config)
 	if(unknown_file_type(res) && effectivePath != NULL_STR)
-		res = file_type_from_path(effectivePath);
+		res = file::type_from_path(effectivePath);
 
 	// check if there is a setting for untitled files (pathAttributes include ‘attr.untitled’)
 	if(unknown_file_type(res) && effectivePath == NULL_STR)
@@ -123,6 +110,33 @@ static std::string find_file_type (std::string const& path, io::bytes_ptr const&
 
 namespace file
 {
+	std::string type_from_bytes (io::bytes_ptr const& bytes)
+	{
+		if(!bytes)
+			return NULL_STR;
+
+		std::multimap<ssize_t, bundles::item_ptr> ordering;
+		for(auto const& item : bundles::query(bundles::kFieldAny, NULL_STR, scope::wildcard, bundles::kItemTypeGrammar))
+		{
+			for(auto const& pattern : item->values_for_field(bundles::kFieldGrammarFirstLineMatch))
+			{
+				char const* first = bytes->begin();
+				char const* last  = bytes->end();
+				if(pattern.find("(?m)") == std::string::npos)
+					last = first_n_lines(first, last, lines_matched_by_regexp(pattern));
+
+				if(regexp::match_t const& m = regexp::search(pattern, first, last))
+					ordering.emplace(-m.end(), item);
+			}
+		}
+		return ordering.empty() ? NULL_STR : file_type_from_grammars(std::vector<bundles::item_ptr>(1, ordering.begin()->second));
+	}
+
+	std::string type_from_path (std::string const& path)
+	{
+		return path != NULL_STR ? file_type_from_grammars(grammars_for_path(path)) : NULL_STR;
+	}
+
 	std::string type (std::string const& path, io::bytes_ptr const& bytes, std::string const& virtualPath)
 	{
 		return find_file_type(path, bytes, virtualPath);
@@ -130,12 +144,33 @@ namespace file
 
 	void set_type (std::string const& path, std::string const& fileType)
 	{
-		if(path != NULL_STR && fileType != NULL_STR)
+		if(path == NULL_STR || fileType == NULL_STR)
+			return;
+
+		std::multimap<ssize_t, std::string> ordering;
+
+		std::string const name = path::name(path);
+		std::string const ext  = path::extensions(name);
+		if(!ext.empty())
+			ordering.emplace(-ext.size(), (name.size() > ext.size() ? "*" : "") + path::glob_t::escape(ext));
+
+		for(auto const& item : bundles::query(bundles::kFieldAny, NULL_STR, scope::wildcard, bundles::kItemTypeGrammar))
 		{
-			std::string const name = path::name(path);
-			std::string const ext  = path::extensions(name);
-			settings_t::set(kSettingsFileTypeKey, fileType, NULL_STR, ext.empty() || ext == name ? path::glob_t::escape(name) : "*" + path::glob_t::escape(ext));
+			for(std::string const& suffix : item->values_for_field(bundles::kFieldGrammarExtension))
+			{
+				std::string::size_type n = path.size() - suffix.size();
+				if(path.size() < suffix.size() || path.compare(n, suffix.size(), suffix) != 0 || (n && !strchr("._/", path[n-1])))
+					continue;
+
+				if(n && strchr("._", path[n-1]))
+					--n;
+
+				ordering.emplace(-(path.size() - n), (n && path[n-1] != '/' ? "*" : "") + path::glob_t::escape(path.substr(n)));
+			}
 		}
+
+		std::string const glob = ordering.empty() ? name : ordering.begin()->second;
+		settings_t::set(kSettingsFileTypeKey, fileType, NULL_STR, glob);
 	}
 
 } /* file */

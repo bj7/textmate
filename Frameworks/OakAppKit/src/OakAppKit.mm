@@ -47,6 +47,12 @@ BOOL OakIsAlternateKeyOrMouseEvent (NSUInteger flags, NSEvent* anEvent)
 
 void OakShowSheetForWindow (NSWindow* sheet, NSWindow* window, void(^callback)(NSInteger))
 {
+	if(!window)
+	{
+		callback([NSApp runModalForWindow:sheet]);
+		return;
+	}
+
 	crash_reporter_info_t info(to_s([NSString stringWithFormat:@"sheet %@, window %@: title ‘%@’, is visible %s, is sheet %s, has sheet %s, delegate %@", sheet, window, window.title, BSTR(window.isVisible), BSTR(window.isSheet), BSTR(window.attachedSheet), window.delegate]));
 	OakSheetCallbackDelegate* delegate = [[OakSheetCallbackDelegate alloc] initWithBlock:callback];
 	[NSApp beginSheet:sheet modalForWindow:window modalDelegate:delegate didEndSelector:@selector(sheetDidEnd:returnCode:contextInfo:) contextInfo:NULL];
@@ -54,10 +60,28 @@ void OakShowSheetForWindow (NSWindow* sheet, NSWindow* window, void(^callback)(N
 
 void OakShowAlertForWindow (NSAlert* alert, NSWindow* window, void(^callback)(NSInteger))
 {
+	if(window && [alert respondsToSelector:@selector(beginSheetModalForWindow:completionHandler:)]) // MAC_OS_X_VERSION_10_9
+	{
+		[alert beginSheetModalForWindow:window completionHandler:callback];
+		return;
+	}
+
 	OakSheetCallbackDelegate* delegate = [[OakSheetCallbackDelegate alloc] initWithBlock:callback];
-	if(window)
-			[alert beginSheetModalForWindow:window modalDelegate:delegate didEndSelector:@selector(sheetDidEnd:returnCode:contextInfo:) contextInfo:NULL];
-	else	[delegate sheetDidEnd:alert returnCode:[alert runModal] contextInfo:NULL];
+	if(window.attachedSheet)
+	{
+		__weak __block id observerId = [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidEndSheetNotification object:window queue:nil usingBlock:^(NSNotification*){
+			[[NSNotificationCenter defaultCenter] removeObserver:observerId];
+			OakShowAlertForWindow(alert, window, callback);
+		}];
+	}
+	else if(window)
+	{
+		[alert beginSheetModalForWindow:window modalDelegate:delegate didEndSelector:@selector(sheetDidEnd:returnCode:contextInfo:) contextInfo:NULL];
+	}
+	else
+	{
+		[delegate sheetDidEnd:alert returnCode:[alert runModal] contextInfo:NULL];
+	}
 }
 
 // ======================
@@ -89,16 +113,13 @@ NSUInteger const OakMoveNoActionReturn = 3;
 {
 	if([_tableView numberOfRows])
 	{
-		if(_tableView.allowsMultipleSelection == NO)
-			extend = NO;
-
 		NSInteger row = [_tableView selectedRow] + anOffset;
 		NSInteger numberOfRows = [_tableView numberOfRows];
 		if(std::abs(anOffset) == 1 && numberOfRows && [[NSUserDefaults standardUserDefaults] boolForKey:kUserDefaultsEnableLoopFilterList])
 				row = (row + numberOfRows) % numberOfRows;
 		else	row = oak::cap((NSInteger)0, row, numberOfRows - 1);
 
-		[_tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:extend];
+		[_tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:extend && _tableView.allowsMultipleSelection];
 		[_tableView scrollRowToVisible:row];
 
 		self.returnCode = OakMoveMoveReturn;
@@ -111,15 +132,15 @@ NSUInteger const OakMoveNoActionReturn = 3;
 - (void)moveDown:(id)sender                             { [self moveSelectedRowByOffset:+1 extendingSelection:NO];  }
 - (void)moveUpAndModifySelection:(id)sender             { [self moveSelectedRowByOffset:-1 extendingSelection:YES]; }
 - (void)moveDownAndModifySelection:(id)sender           { [self moveSelectedRowByOffset:+1 extendingSelection:YES]; }
-- (void)movePageUp:(id)sender                           { [self moveSelectedRowByOffset:-[self visibleRows] extendingSelection:NO]; }
-- (void)movePageDown:(id)sender                         { [self moveSelectedRowByOffset:+[self visibleRows] extendingSelection:NO]; }
+- (void)pageUp:(id)sender                               { [self moveSelectedRowByOffset:-[self visibleRows] extendingSelection:NO]; }
+- (void)pageDown:(id)sender                             { [self moveSelectedRowByOffset:+[self visibleRows] extendingSelection:NO]; }
+- (void)pageUpAndModifySelection:(id)sender             { [self moveSelectedRowByOffset:-[self visibleRows] extendingSelection:YES]; }
+- (void)pageDownAndModifySelection:(id)sender           { [self moveSelectedRowByOffset:+[self visibleRows] extendingSelection:YES]; }
 - (void)moveToBeginningOfDocument:(id)sender            { [self moveSelectedRowByOffset:-(INT_MAX >> 1) extendingSelection:NO]; }
 - (void)moveToEndOfDocument:(id)sender                  { [self moveSelectedRowByOffset:+(INT_MAX >> 1) extendingSelection:NO]; }
 
-- (void)pageUp:(id)sender                               { [self movePageUp:sender]; }
-- (void)pageDown:(id)sender                             { [self movePageDown:sender]; }
-- (void)scrollPageUp:(id)sender                         { [self movePageUp:sender]; }
-- (void)scrollPageDown:(id)sender                       { [self movePageDown:sender]; }
+- (void)scrollPageUp:(id)sender                         { [self pageUp:sender]; }
+- (void)scrollPageDown:(id)sender                       { [self pageDown:sender]; }
 - (void)scrollToBeginningOfDocument:(id)sender          { [self moveToBeginningOfDocument:sender]; }
 - (void)scrollToEndOfDocument:(id)sender                { [self moveToEndOfDocument:sender]; }
 
@@ -140,21 +161,9 @@ NSUInteger OakPerformTableViewActionFromKeyEvent (NSTableView* tableView, NSEven
 	return helper.returnCode;
 }
 
-NSUInteger OakPerformTableViewActionFromSelector (NSTableView* tableView, SEL selector, NSTextView* textView)
+NSUInteger OakPerformTableViewActionFromSelector (NSTableView* tableView, SEL selector)
 {
 	OakTableViewActionHelper* helper = [OakTableViewActionHelper tableViewActionHelperWithTableView:tableView];
 	[helper doCommandBySelector:selector];
 	return helper.returnCode;
 }
-
-// ======================
-
-#if !defined(MAC_OS_X_VERSION_10_10) || (MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_10)
-// 10.9 and 10.10 SDKs don't define NSAppKitVersionNumber10_9 (nor *_10)
-// literal value taken of 1265 from https://developer.apple.com/library/prerelease/mac/releasenotes/AppKit/RN-AppKit/index.html
-#ifndef NSAppKitVersionNumber10_9
-#define NSAppKitVersionNumber10_9 1265
-#endif
-NSString *const _NSAccessibilitySharedFocusElementsAttribute = @"AXSharedFocusElements";
-NSString *const *const pNSAccessibilitySharedFocusElementsAttribute = (floor(NSAppKitVersionNumber) <= NSAppKitVersionNumber10_9) ? nil : &_NSAccessibilitySharedFocusElementsAttribute;
-#endif

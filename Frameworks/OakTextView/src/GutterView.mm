@@ -1,12 +1,12 @@
 #import "GutterView.h"
 #import <OakAppKit/OakAppKit.h>
 #import <OakAppKit/NSImage Additions.h>
-#import <OakAppKit/NSColor Additions.h>
 #import <OakFoundation/NSString Additions.h>
 #import <Preferences/Keys.h>
 #import <text/types.h>
 #import <cf/cf.h>
 #import <cf/cgrect.h>
+#import <crash/info.h>
 #import <oak/debug.h>
 #import <oak/oak.h>
 
@@ -56,6 +56,12 @@ struct data_source_t
 {
 	if(self = [super initWithFrame:frame])
 	{
+		id fontName = [[NSUserDefaults standardUserDefaults] objectForKey:@"NSFixedPitchFont"];
+		id fontSize = [[NSUserDefaults standardUserDefaults] objectForKey:@"NSFixedPitchFontSize"];
+		crash_reporter_info_t info("User has font name override %s, size %s", BSTR(fontName), BSTR(fontSize));
+		if(fontName) info << "font name: " << [[fontName description] UTF8String];
+		if(fontSize) info << "font size: " << [[fontSize description] UTF8String];
+
 		hiddenColumns       = [NSMutableSet new];
 		self.lineNumberFont = [NSFont userFixedPitchFontOfSize:12];
 		[self insertColumnWithIdentifier:GVLineNumbersColumnIdentifier atPosition:0 dataSource:nil delegate:nil];
@@ -81,12 +87,6 @@ struct data_source_t
 	D(DBF_GutterView, bug("\n"););
 	[super updateTrackingAreas];
 	[self setupTrackingRects];
-}
-
-- (void)removeFromSuperview
-{
-	D(DBF_GutterView, bug("\n"););
-	self.partnerView = nil;
 }
 
 - (void)viewDidMoveToWindow
@@ -266,7 +266,7 @@ static CTLineRef CreateCTLineFromText (std::string const& text, NSFont* font, NS
 	CTLineRef res = NULL;
 	if(CFMutableDictionaryRef dict = CFDictionaryCreateMutable(kCFAllocatorDefault, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks))
 	{
-		if(CGColorRef cgColor = [color tmCGColor])
+		if(CGColorRef cgColor = [color CGColor])
 			CFDictionaryAddValue(dict, kCTForegroundColorAttributeName, cgColor);
 
 		if(CFStringRef fontName = (CFStringRef)CFBridgingRetain([font fontName]))

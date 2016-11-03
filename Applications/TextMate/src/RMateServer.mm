@@ -1,10 +1,12 @@
 #include <oak/oak.h>
 #include <text/parse.h>
 #include <text/hexdump.h>
-#include <document/collection.h>
+#include <document/OakDocument.h>
+#include <document/OakDocumentController.h>
 #include <oak/debug.h>
 #include <authorization/authorization.h>
 #include <io/io.h>
+#include <ns/ns.h>
 #include <OakAppKit/IOAlertPanel.h>
 
 OAK_DEBUG_VAR(RMateServer);
@@ -39,12 +41,11 @@ struct socket_callback_t
 {
 	WATCH_LEAKS(socket_callback_t);
 
-	template <typename F>
-	socket_callback_t (F f, socket_t const& fd)
+	socket_callback_t (std::function<bool(socket_t const&)> const& f, socket_t const& fd)
 	{
 		D(DBF_RMateServer, bug("%p, %d\n", this, (int)fd););
 
-		helper = std::make_shared<helper_t<F>>(f, fd, this);
+		helper = std::make_shared<helper_t>(f, fd, this);
 
 		CFSocketContext const context = { 0, helper.get(), NULL, NULL, NULL };
 		if(socket = CFSocketCreateWithNative(kCFAllocatorDefault, fd, kCFSocketReadCallBack, callback, &context))
@@ -79,30 +80,22 @@ struct socket_callback_t
 
 	static void callback (CFSocketRef s, CFSocketCallBackType callbackType, CFDataRef address, void const* data, void* info)
 	{
-		(*(helper_base_t*)info)();
+		(*(helper_t*)info)();
 	}
 
 private:
-	struct helper_base_t
+	struct helper_t
 	{
-		WATCH_LEAKS(helper_base_t);
-
-		virtual ~helper_base_t () { }
-		virtual void operator() () = 0;
-	};
-
-	template <typename F>
-	struct helper_t : helper_base_t
-	{
-		helper_t (F f, socket_t const& socket, socket_callback_t* parent) : f(f), socket(socket), parent(parent) { }
+		helper_t (std::function<bool(socket_t const&)> const& f, socket_t const& socket, socket_callback_t* parent) : f(f), socket(socket), parent(parent) { }
 		void operator() () { if(!f(socket)) delete parent; }
+
 	private:
-		F f;
+		std::function<bool(socket_t const&)> f;
 		socket_t socket;
 		socket_callback_t* parent;
 	};
 
-	std::shared_ptr<helper_base_t> helper;
+	std::shared_ptr<helper_t> helper;
 	CFSocketRef socket;
 	CFRunLoopSourceRef run_loop_source;
 };
@@ -185,9 +178,9 @@ namespace
 			struct sockaddr_in6 iaddr = { sizeof(sockaddr_in6), AF_INET6, htons(_port) };
 			iaddr.sin6_addr = listenForRemoteClients ? in6addr_any : in6addr_loopback;
 			if(-1 == bind(fd, (sockaddr*)&iaddr, sizeof(iaddr)))
-				fprintf(stderr, "bind(): %s\n", strerror(errno));
+				perror("rmate: bind");
 			if(-1 == listen(fd, SOMAXCONN))
-				fprintf(stderr, "listen(): %s\n", strerror(errno));
+				perror("rmate: listen");
 
 			_callback = std::make_shared<socket_callback_t>(&rmate_connection_handler_t, fd);
 		}
@@ -268,43 +261,38 @@ struct record_t
 
 namespace // wrap in anonymous namespace to avoid clashing with other callbacks named the same
 {
-	struct base_t : document::document_t::callback_t
+	struct base_t
 	{
 		WATCH_LEAKS(base_t);
 
-		virtual void save_document (document::document_ptr document)  { }
-		virtual void close_document (document::document_t* document) { }
-
-		void document_will_delete (document::document_t* document)
+		base_t (OakDocument* document)
 		{
-			close_and_delete(document);
+			_close_observer = [[NSNotificationCenter defaultCenter] addObserverForName:OakDocumentWillCloseNotification object:document queue:nil usingBlock:^(NSNotification*){
+				this->close_document(document);
+				delete this;
+			}];
+			_save_observer = [[NSNotificationCenter defaultCenter] addObserverForName:OakDocumentDidSaveNotification object:document queue:nil usingBlock:^(NSNotification*){
+				this->save_document(document);
+			}];
 		}
 
-		void handle_document_event (document::document_ptr document, event_t event)
+		virtual ~base_t ()
 		{
-			if(event == did_change_open_status && !document->is_open())
-			{
-				D(DBF_RMateServer, bug("%p\n", this););
-				close_and_delete(document.get());
-			}
-			else if(event == did_save)
-			{
-				save_document(document);
-			}
+			[[NSNotificationCenter defaultCenter] removeObserver:_save_observer];
+			[[NSNotificationCenter defaultCenter] removeObserver:_close_observer];
 		}
+
+		virtual void save_document (OakDocument* document)  { }
+		virtual void close_document (OakDocument* document) { }
 
 	private:
-		void close_and_delete (document::document_t* document)
-		{
-			document->remove_callback(this);
-			close_document(document);
-			delete this;
-		}
+		id _save_observer;
+		id _close_observer;
 	};
 
 	struct retain_temp_file_callback_t : base_t
 	{
-		retain_temp_file_callback_t (temp_file_ptr file) : file(file) { }
+		retain_temp_file_callback_t (OakDocument* document, temp_file_ptr file) : base_t(document), file(file) { }
 		temp_file_ptr file;
 	};
 
@@ -312,14 +300,14 @@ namespace // wrap in anonymous namespace to avoid clashing with other callbacks 
 	{
 		WATCH_LEAKS(save_close_callback_t);
 
-		save_close_callback_t (std::string const& path, socket_t const& socket, bool data_on_save, bool data_on_close, std::string const& token) : path(path), socket(socket), data_on_save(data_on_save), data_on_close(data_on_close), token(token)
+		save_close_callback_t (OakDocument* document, std::string const& path, socket_t const& socket, bool data_on_save, bool data_on_close, std::string const& token) : base_t(document), path(path), socket(socket), data_on_save(data_on_save), data_on_close(data_on_close), token(token)
 		{
 			D(DBF_RMateServer, bug("%p\n", this););
 		}
 
-		void save_document (document::document_ptr document)
+		void save_document (OakDocument* document)
 		{
-			D(DBF_RMateServer, bug("%s\n", document->path().c_str()););
+			D(DBF_RMateServer, bug("%s\n", document.path.UTF8String););
 			bool res = true;
 			res = res && write(socket, "save\r\n", 6) == 6;
 			res = res && write_token();
@@ -327,12 +315,12 @@ namespace // wrap in anonymous namespace to avoid clashing with other callbacks 
 				res = res && write_data();
 			res = res && write(socket, "\r\n", 2) == 2;
 			if(!res)
-				fprintf(stderr, "*** rmate: callback failed to save ‘%s’\n", document->display_name().c_str());
+				fprintf(stderr, "*** rmate: callback failed to save ‘%s’\n", document.displayName.UTF8String);
 		}
 
-		void close_document (document::document_t* document)
+		void close_document (OakDocument* document)
 		{
-			D(DBF_RMateServer, bug("%s\n", document->path().c_str()););
+			D(DBF_RMateServer, bug("%s\n", document.path.UTF8String););
 			bool res = true;
 			res = res && write(socket, "close\r\n", 7) == 7;
 			res = res && write_token();
@@ -340,7 +328,7 @@ namespace // wrap in anonymous namespace to avoid clashing with other callbacks 
 				res = res && write_data();
 			res = res && write(socket, "\r\n", 2) == 2;
 			if(!res)
-				fprintf(stderr, "*** rmate: callback failed while closing ‘%s’\n", document->display_name().c_str());
+				fprintf(stderr, "*** rmate: callback failed while closing ‘%s’\n", document.displayName.UTF8String);
 		}
 
 	private:
@@ -379,7 +367,7 @@ namespace // wrap in anonymous namespace to avoid clashing with other callbacks 
 		std::string token;
 	};
 
-	struct reactivate_callback_t : base_t
+	struct reactivate_callback_t
 	{
 		WATCH_LEAKS(reactivate_callback_t);
 
@@ -389,17 +377,18 @@ namespace // wrap in anonymous namespace to avoid clashing with other callbacks 
 			_terminal = [[NSWorkspace sharedWorkspace] frontmostApplication];
 		}
 
-		void watch_document (document::document_ptr document)
+		void watch_document (OakDocument* document)
 		{
-			++*shared_count;
-			document->add_callback(new reactivate_callback_t(*this));
-		}
+			auto counter = shared_count;
+			NSRunningApplication* terminal = _terminal;
 
-		void close_document (document::document_t* document)
-		{
-			D(DBF_RMateServer, bug("%zu → %zu\n", *shared_count, *shared_count - 1););
-			if(--*shared_count == 0)
-				[_terminal activateWithOptions:NSApplicationActivateIgnoringOtherApps];
+			++*counter;
+			__weak __block id observerId = [[NSNotificationCenter defaultCenter] addObserverForName:OakDocumentWillCloseNotification object:document queue:nil usingBlock:^(NSNotification*){
+				D(DBF_RMateServer, bug("%zu → %zu\n", *shared_count, *shared_count - 1););
+				if(--*counter == 0)
+					[terminal activateWithOptions:NSApplicationActivateIgnoringOtherApps];
+				[[NSNotificationCenter defaultCenter] removeObserver:observerId];
+			}];
 		}
 
 	private:
@@ -528,7 +517,7 @@ struct socket_observer_t
 	{
 		reactivate_callback_t reactivate_callback;
 
-		std::vector<document::document_ptr> documents;
+		NSMutableArray<OakDocument*>* documents = [NSMutableArray array];
 		for(auto& record : records)
 		{
 			std::map<std::string, std::string>& args = record.arguments;
@@ -539,61 +528,61 @@ struct socket_observer_t
 			bool reActivate       = args["re-activate"] == "yes";
 			std::string fileType  = args.find("file-type") == args.end() ? NULL_STR : args["file-type"];
 
-			document::document_ptr doc;
+			OakDocument* doc;
 			if(args.find("path") != args.end())
 			{
 				if(path::is_directory(args["path"]))
 				{
-					document::show_browser(args["path"]);
+					[OakDocumentController.sharedInstance showFileBrowserAtPath:to_ns(args["path"])];
 					continue;
 				}
-				doc = document::create(args["path"]);
+				doc = [OakDocumentController.sharedInstance documentWithPath:to_ns(args["path"])];
 			}
 			else if(args.find("uuid") != args.end())
 			{
-				if(!(doc = document::find(args["uuid"])))
+				if(!(doc = [OakDocumentController.sharedInstance findDocumentWithIdentifier:[[NSUUID alloc] initWithUUIDString:to_ns(args["uuid"])]]))
 					continue;
 			}
 			else if(args.find("data") != args.end())
 			{
 				if(writeBackOnSave || writeBackOnClose)
 				{
-					doc = document::create(args["data"]);
-					doc->set_recent_tracking(false);
+					doc = [OakDocumentController.sharedInstance documentWithPath:to_ns(args["data"])];
+					doc.recentTrackingDisabled = YES;
 				}
 				else
 				{
-					doc = document::from_content(path::content(args["data"]), fileType);
+					doc = [OakDocument documentWithData:[NSData dataWithContentsOfFile:to_ns(args["data"])] fileType:to_ns(fileType) customName:nil];
 				}
 			}
 			else
 			{
-				doc = document::create();
+				doc = [OakDocumentController.sharedInstance untitledDocument];
 			}
 
 			if(fileType != NULL_STR)
-				doc->set_file_type(fileType);
+				doc.fileType = to_ns(fileType);
 
 			if(args.find("real-path") != args.end())
 			{
 				D(DBF_RMateServer, bug("set document’s virtual path: %s\n", args["real-path"].c_str()););
-				doc->set_virtual_path(args["real-path"]);
+				doc.virtualPath = to_ns(args["real-path"]);
 			}
 
 			if(!args["display-name"].empty())
-				doc->set_custom_name(args["display-name"]);
+				doc.customName = to_ns(args["display-name"]);
 
 			if(!args["selection"].empty())
-				doc->set_selection(args["selection"]);
+				doc.selection = to_ns(args["selection"]);
 
 			if(args["add-to-recents"] != "yes")
-				doc->set_recent_tracking(false);
+				doc.recentTrackingDisabled = YES;
 
 			if(wait || writeBackOnSave || writeBackOnClose)
-				doc->add_callback(new save_close_callback_t(doc->path(), socket, writeBackOnSave, writeBackOnClose, token));
+				new save_close_callback_t(doc, to_s(doc.path), socket, writeBackOnSave, writeBackOnClose, token);
 
 			if(args.find("data") != args.end() && (writeBackOnSave || writeBackOnClose))
-				doc->add_callback(new retain_temp_file_callback_t(record.file));
+				new retain_temp_file_callback_t(doc, record.file);
 
 			if(reActivate)
 				reactivate_callback.watch_document(doc);
@@ -603,16 +592,16 @@ struct socket_observer_t
 			// bool bring_to_front;
 
 			if(args.find("authorization") != args.end())
-				doc->set_authorization(args["authorization"]);
+				doc.authorization = args["authorization"];
 
 			if(oak::uuid_t::is_valid(args["project-uuid"]))
-					document::show(doc, args["project-uuid"]);
-			else	documents.push_back(doc);
+					[OakDocumentController.sharedInstance showDocument:doc inProject:[[NSUUID alloc] initWithUUIDString:to_ns(args["project-uuid"])] bringToFront:YES];
+			else	[documents addObject:doc];
 		}
 
-		if(documents.empty())
-				[NSApp activateIgnoringOtherApps:YES];
-		else	document::show(documents);
+		if(documents.count)
+				[OakDocumentController.sharedInstance showDocuments:documents];
+		else	[NSApp activateIgnoringOtherApps:YES];
 	}
 
 	void handle_marks (socket_t const& socket)
@@ -624,11 +613,11 @@ struct socket_observer_t
 
 			auto& args = record.arguments;
 
-			document::document_ptr doc;
+			OakDocument* doc;
 			if(args.find("uuid") != args.end())
-				doc = document::find(args["uuid"]);
+				doc = [OakDocumentController.sharedInstance findDocumentWithIdentifier:[[NSUUID alloc] initWithUUIDString:to_ns(args["uuid"])]];
 			else if(args.find("path") != args.end())
-				doc = document::create(args["path"]);
+				doc = [OakDocumentController.sharedInstance documentWithPath:to_ns(args["path"])];
 
 			text::pos_t line = args.find("line") != args.end() ? text::pos_t(args["line"]) : text::pos_t::undefined;
 			std::string mark = args.find("mark") != args.end() ? args["mark"] : NULL_STR;
@@ -636,14 +625,14 @@ struct socket_observer_t
 			if(record.command == "clear-mark")
 			{
 				if(doc)
-						doc->remove_mark(line, mark);
-				else	document::remove_marks(mark);
+						[doc removeMarkOfType:to_ns(mark) atPosition:line];
+				else	[OakDocument removeAllMarksOfType:to_ns(mark)];
 			}
 			else if(record.command == "set-mark")
 			{
 				std::string::size_type n = mark.find(':');
 				if(doc)
-						doc->add_mark(line, n == std::string::npos ? mark : mark.substr(0, n), n == std::string::npos ? std::string() : mark.substr(n+1));
+						[doc setMarkOfType:to_ns(n == std::string::npos ? mark : mark.substr(0, n)) atPosition:line content:n == std::string::npos ? nil : to_ns(mark.substr(n+1))];
 				else	fprintf(stderr, "set-mark: no document\n");
 			}
 		}
@@ -659,7 +648,7 @@ static bool rmate_connection_handler_t (socket_t const& socket)
 	std::string welcome = "220 " + sys_info(KERN_HOSTNAME) + " RMATE TextMate (" + sys_info(KERN_OSTYPE) + " " + sys_info(KERN_OSRELEASE) + ")\n";
 	ssize_t len = write(newFd, welcome.data(), welcome.size());
 	if(len == -1)
-		fprintf(stderr, "error writing: %s\n", strerror(errno));
+		perror("rmate: write");
 
 	new socket_callback_t(socket_observer_t(), newFd);
 	return true;

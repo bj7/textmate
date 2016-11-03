@@ -6,6 +6,7 @@
 #include <oak/oak.h>
 #include <text/case.h>
 #include <text/utf8.h>
+#include <text/transcode.h>
 #include <cf/cf.h>
 
 OAK_DEBUG_VAR(FormatString);
@@ -143,7 +144,9 @@ struct expand_visitor : boost::static_visitor<void>
 
 	static std::string capitalize (std::string const& src)
 	{
-		return format_string::replace(format_string::replace(src, "\\A\\p{^Lower}+\\z|\\b\\p{Upper}\\p{^Upper}+?\\b", "${0:/downcase}"), "^([\\W\\d]*)(\\w[-\\w]*)|\\b((?!(?:else|from|over|then|when)\\b)\\w[-\\w]{3,}|\\w[-\\w]*[\\W\\d]*$)", "${1:?$1\\u$2:\\u$0}");
+		static regexp::pattern_t const words  = "\\A\\p{^Lower}+\\z|\\b\\p{Upper}\\p{^Upper}+?\\b";
+		static regexp::pattern_t const upcase = "^([\\W\\d]*)(\\w[-\\w]*)|\\b((?!(?:else|from|over|then|when)\\b)\\w[-\\w]{3,}|\\w[-\\w]*[\\W\\d]*$)";
+		return format_string::replace(format_string::replace(src, words, "${0:/downcase}"), upcase, "${1:?$1\\u$2:\\u$0}");
 	}
 
 	static std::string asciify (std::string const& org)
@@ -151,41 +154,18 @@ struct expand_visitor : boost::static_visitor<void>
 		std::string src = org;
 		if(CFMutableStringRef tmp = CFStringCreateMutableCopy(kCFAllocatorDefault, 0, cf::wrap(src)))
 		{
-			CFStringTransform(tmp, NULL, kCFStringTransformStripDiacritics, false);
-			CFStringTransform(tmp, NULL, kCFStringTransformStripCombiningMarks, false);
+			CFStringTransform(tmp, nullptr, kCFStringTransformStripDiacritics, false);
+			CFStringTransform(tmp, nullptr, kCFStringTransformStripCombiningMarks, false);
 			src = cf::to_s(tmp);
 			CFRelease(tmp);
 		}
 
-		iconv_t cd = iconv_open("ASCII//TRANSLIT", "UTF-8");
-		if(cd == (iconv_t)(-1))
+		text::transcode_t transcode("UTF-8", "ASCII//TRANSLIT");
+		if(!transcode)
 			return src; // error
 
-		char const* first = src.data();
-		char const* last  = first + src.size();
-
-		std::string buffer(256, ' ');
-		size_t buffer_contains = 0;
-
-		while(first != last)
-		{
-			if(buffer.size() - buffer_contains < 256)
-				buffer.resize(buffer.size() * 2);
-
-			char* dst      = &buffer[buffer_contains];
-			size_t dstSize = buffer.size() - buffer_contains;
-			size_t srcSize = last - first;
-
-			size_t rc = iconv(cd, (char**)&first, &srcSize, &dst, &dstSize);
-			if(rc == (size_t)(-1) && errno != E2BIG && (errno != EINVAL || buffer.size() - buffer_contains - dstSize == 0))
-				return src; // error
-
-			buffer_contains += buffer.size() - buffer_contains - dstSize;
-		}
-
-		iconv_close(cd);
-
-		buffer.resize(buffer_contains);
+		std::string buffer;
+		transcode(transcode(src.data(), src.data() + src.size(), back_inserter(buffer)));
 		return buffer;
 	}
 
@@ -279,10 +259,7 @@ namespace format_string
 	// = format_string_t =
 	// ===================
 
-	format_string_t::format_string_t (parser::nodes_t const& n)
-	{
-		nodes = std::make_shared<parser::nodes_t>(n);
-	}
+	format_string_t::format_string_t (parser::nodes_t const& n) : nodes(std::make_shared<parser::nodes_t>(n)) { }
 
 	void format_string_t::init (std::string const& str, char const* stopChars)
 	{
@@ -293,7 +270,7 @@ namespace format_string
 
 	std::string format_string_t::expand (std::map<std::string, std::string> const& variables) const
 	{
-		expand_visitor v(variables, NULL);
+		expand_visitor v(variables, nullptr);
 		v.traverse(*nodes);
 		v.handle_case_changes();
 		return v.res;
@@ -307,7 +284,7 @@ namespace format_string
 	{
 		D(DBF_FormatString, bug("%s\n", src.c_str()););
 
-		expand_visitor v(variables, NULL);
+		expand_visitor v(variables, nullptr);
 		v.replace(src, ptrn, *format.nodes, repeat);
 		v.handle_case_changes();
 		return v.res;
@@ -315,6 +292,8 @@ namespace format_string
 
 	std::string expand (std::string const& format, std::map<std::string, std::string> const& variables)
 	{
+		if(format.find_first_of("$(\\") == std::string::npos)
+			return format;
 		return format_string_t(format).expand(variables);
 	}
 

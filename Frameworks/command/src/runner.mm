@@ -1,5 +1,4 @@
 #include "runner.h"
-#include <OakSystem/application.h>
 #include <OakSystem/process.h>
 #include <OakFoundation/NSString Additions.h>
 #include <io/path.h>
@@ -60,7 +59,7 @@ static std::tuple<pid_t, int, int> my_fork (char const* cmd, int inputRead, std:
 				continue;
 
 			if(close(fd) == -1)
-				perror("error closing fd after fork:");
+				perror("runner_t: close");
 		}
 
 		for(int fd : oldOutErr) close(fd);
@@ -71,7 +70,7 @@ static std::tuple<pid_t, int, int> my_fork (char const* cmd, int inputRead, std:
 
 		char* argv[] = { (char*)cmd, NULL };
 		execve(argv[0], argv, env);
-		perror("interpreter failed");
+		perror("runner_t: execve");
 		_exit(EXIT_FAILURE);
 	}
 
@@ -81,48 +80,52 @@ static std::tuple<pid_t, int, int> my_fork (char const* cmd, int inputRead, std:
 	return { pid, outputRead, errorRead };
 }
 
-static void exhaust_fd_in_queue (dispatch_group_t group, dispatch_queue_t queue, int fd, void(^handler)(char const* bytes, size_t len))
+static void exhaust_fd_in_queue (dispatch_group_t group, int fd, CFRunLoopRef runLoop, void(^handler)(char const* bytes, size_t len))
 {
 	dispatch_group_async(group, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
 		char buf[8192];
 		ssize_t len = 0;
 		while((len = read(fd, buf, sizeof(buf))) > 0)
 		{
+			dispatch_semaphore_t sem = dispatch_semaphore_create(0);
 			char const* bytes = buf;
-			dispatch_sync(queue, ^{
+			CFRunLoopPerformBlock(runLoop, kCFRunLoopCommonModes, ^{
 				handler(bytes, len);
+				dispatch_semaphore_signal(sem);
 			});
+			CFRunLoopWakeUp(runLoop);
+			dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
 		}
 		if(len == -1)
-			perror("read");
+			perror("runner_t: read");
 		close(fd);
 	});
 }
 
-static pid_t run_command (dispatch_group_t rootGroup, std::string const& cmd, int inputFd, std::map<std::string, std::string> const& env, std::string const& cwd, dispatch_queue_t queue, void(^stdoutHandler)(char const* bytes, size_t len), void(^stderrHandler)(char const* bytes, size_t len), void(^completionHandler)(int status))
+static pid_t run_command (dispatch_group_t rootGroup, std::string const& cmd, int inputFd, std::map<std::string, std::string> const& env, std::string const& cwd, CFRunLoopRef runLoop, void(^stdoutHandler)(char const* bytes, size_t len), void(^stderrHandler)(char const* bytes, size_t len), void(^completionHandler)(int status))
 {
 	pid_t pid;
 	int outputFd, errorFd;
 	std::tie(pid, outputFd, errorFd) = my_fork(cmd.c_str(), inputFd, env, cwd.c_str());
 
 	dispatch_group_t group = dispatch_group_create();
-	exhaust_fd_in_queue(group, queue, outputFd, stdoutHandler);
-	exhaust_fd_in_queue(group, queue, errorFd, stderrHandler);
+	exhaust_fd_in_queue(group, outputFd, runLoop, stdoutHandler);
+	exhaust_fd_in_queue(group, errorFd, runLoop, stderrHandler);
 
 	__block int status = 0;
 	dispatch_group_async(group, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
 		if(waitpid(pid, &status, 0) != pid)
-			perror("waitpid");
+			perror("runner_t: waitpid");
 	});
 
-	dispatch_retain(rootGroup);
 	dispatch_group_enter(rootGroup);
-	dispatch_group_notify(group, queue, ^{
-		completionHandler(status);
+	dispatch_group_notify(group, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+		CFRunLoopPerformBlock(runLoop, kCFRunLoopCommonModes, ^{
+			completionHandler(status);
+		});
+		CFRunLoopWakeUp(runLoop);
 		dispatch_group_leave(rootGroup);
-		dispatch_release(rootGroup);
 	});
-	dispatch_release(group);
 
 	return pid;
 }
@@ -139,18 +142,13 @@ namespace command
 	// = Command Runner =
 	// ==================
 
-	runner_t::runner_t (bundle_command_t const& command, ng::buffer_t const& buffer, ng::ranges_t const& selection, std::map<std::string, std::string> const& environment, std::string const& pwd, delegate_ptr delegate) : _command(command), _environment(environment), _directory(pwd), _delegate(delegate), _input_was_selection(false), _did_detach(false)
+	runner_t::runner_t (bundle_command_t const& command, ng::buffer_api_t const& buffer, ng::ranges_t const& selection, std::map<std::string, std::string> const& environment, std::string const& pwd, delegate_ptr delegate) : _command(command), _environment(environment), _directory(pwd), _delegate(delegate), _input_was_selection(false), _did_detach(false)
 	{
 		_dispatch_group = dispatch_group_create();
 		fix_shebang(&_command.command);
 	}
 
-	runner_t::~runner_t ()
-	{
-		dispatch_release(_dispatch_group);
-	}
-
-	runner_ptr runner (bundle_command_t const& command, ng::buffer_t const& buffer, ng::ranges_t const& selection, std::map<std::string, std::string> const& environment, delegate_ptr delegate, std::string const& pwd)
+	runner_ptr runner (bundle_command_t const& command, ng::buffer_api_t const& buffer, ng::ranges_t const& selection, std::map<std::string, std::string> const& environment, delegate_ptr delegate, std::string const& pwd)
 	{
 		return std::make_shared<runner_t>(command, buffer, selection, environment, pwd, delegate);
 	}
@@ -180,8 +178,7 @@ namespace command
 		};
 
 		bool hasHTMLOutput = _command.output == output::new_window && _command.output_format == output_format::html;
-		dispatch_queue_t queue = dispatch_get_main_queue();
-		_process_id = run_command(_dispatch_group, _temp_path, stdinRead, _environment, _directory, queue, hasHTMLOutput ? htmlOutHandler : textOutHandler, stderrHandler, completionHandler);
+		_process_id = run_command(_dispatch_group, _temp_path, stdinRead, _environment, _directory, CFRunLoopGetCurrent(), hasHTMLOutput ? htmlOutHandler : textOutHandler, stderrHandler, completionHandler);
 
 		if(hasHTMLOutput)
 		{
@@ -202,7 +199,9 @@ namespace command
 		NSMutableArray* queuedEvents = [NSMutableArray array];
 		while(_process_id != -1 && !_did_detach)
 		{
-			if(NSEvent* event = [NSApp nextEventMatchingMask:NSAnyEventMask untilDate:[NSDate distantFuture] inMode:NSDefaultRunLoopMode dequeue:YES])
+			// We use CFRunLoopRunInMode() to handle dispatch queues and nextEventMatchingMask:… to catcn ⌃C
+			CFRunLoopRunInMode(kCFRunLoopDefaultMode, 5, true);
+			if(NSEvent* event = [NSApp nextEventMatchingMask:NSAnyEventMask untilDate:nil inMode:NSDefaultRunLoopMode dequeue:YES])
 			{
 				static NSEventType const events[] = { NSLeftMouseDown, NSLeftMouseUp, NSRightMouseDown, NSRightMouseUp, NSOtherMouseDown, NSOtherMouseUp, NSLeftMouseDragged, NSRightMouseDragged, NSOtherMouseDragged, NSKeyDown, NSKeyUp, NSFlagsChanged };
 				if(!oak::contains(std::begin(events), std::end(events), [event type]))
@@ -223,10 +222,6 @@ namespace command
 					[queuedEvents addObject:event];
 				}
 			}
-			else
-			{
-				break;
-			}
 		}
 
 		for(NSEvent* event in queuedEvents)
@@ -235,8 +230,26 @@ namespace command
 
 	void runner_t::wait_for_command ()
 	{
-		ASSERT(dispatch_get_main_queue() != dispatch_get_current_queue());
-		dispatch_group_wait(_dispatch_group, DISPATCH_TIME_FOREVER);
+		if(_process_id == -1)
+			return;
+
+		if(_did_detach)
+		{
+			__block bool shouldWait = true;
+			CFRunLoopRef runLoop = CFRunLoopGetCurrent();
+
+			dispatch_group_notify(_dispatch_group, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+				shouldWait = false;
+				CFRunLoopStop(runLoop);
+			});
+
+			while(shouldWait)
+				CFRunLoopRun();
+		}
+		else
+		{
+			wait();
+		}
 	}
 
 	void runner_t::did_exit (int status)
@@ -263,7 +276,7 @@ namespace command
 		output_caret::type outputCaret = _command.output_caret;
 
 		int rc = WIFEXITED(status) ? WEXITSTATUS(status) : (WIFSIGNALED(status) ? 0 : -1);
-		enum { exit_discard = 200, exit_replace_text, exit_replace_document, exit_insert_text, exit_insert_snippet, exit_show_html, exit_show_tool_tip, exit_create_new_document };
+		enum { exit_discard = 200, exit_replace_text, exit_replace_document, exit_insert_text, exit_insert_snippet, exit_show_html, exit_show_tool_tip, exit_create_new_document, exit_insert_snippet_no_indent, exit_last };
 		switch(rc)
 		{
 			case exit_discard:             placement = output::discard;                                            break;
@@ -271,6 +284,7 @@ namespace command
 			case exit_replace_document:    placement = output::replace_document;  format = output_format::text;    outputCaret = output_caret::interpolate_by_line;   break;
 			case exit_insert_text:         placement = output::after_input;       format = output_format::text;    outputCaret = output_caret::after_output;          break;
 			case exit_insert_snippet:
+			case exit_insert_snippet_no_indent:
 			{
 				if(_command.input == input::selection)
 					placement = output::replace_input;
@@ -287,7 +301,7 @@ namespace command
 		}
 
 		D(DBF_Command_Runner, bug("placement %d, format %d\n", placement, format););
-		if(rc != 0 && !_user_abort && !(200 <= rc && rc <= 207))
+		if(rc != 0 && !_user_abort && !(200 <= rc && rc < exit_last))
 		{
 			_delegate->show_error(_command, rc, _out, _err);
 		}
@@ -336,7 +350,7 @@ namespace command
 				}
 			}
 
-			if(format == output_format::snippet && _command.disable_output_auto_indent)
+			if(format == output_format::snippet && (_command.disable_output_auto_indent || rc == exit_insert_snippet_no_indent))
 				format = output_format::snippet_no_auto_indent;
 
 			_delegate->accept_result(_out, placement, format, outputCaret, _input_ranges, _environment);

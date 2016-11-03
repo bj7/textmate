@@ -2,12 +2,175 @@ Title: Release Notes
 
 # Changes
 
-## 2016-05-30 (v2.0-beta.9.3)
+## 2016-10-23 (v2.0-beta.12.26)
+
+* TextMate’s bundle identifier has been changed to `com.macromates.TextMate` (previously it had a `preview` suffix). This is the same bundle identifier as TextMate 1.x so if you still have TextMate 1.x installed then we recommend to simply delete it.
+
+	The changed bundle identifier may cause a compatibility issue with third party software, particularly software that offers an “Open in TextMate 2”, there is unfortunately no nice solution to this problem other than request that the software is updated to use the new (old) bundle identifier.
+
+	The `mate` command line tool is among such software, but it should automatically update to version 2.11, if not, go to _Preferences → Terminal_ and select to Uninstall and then Install `mate` (the automatic updating of `mate` only works if TextMate can figure out where it was previously installed).
+
+* See [all changes since v2.0-beta.12.23](https://github.com/textmate/textmate/compare/v2.0-beta.12.23...v2.0-beta.12.26)
+
+## 2016-10-11 (v2.0-beta.12.23)
+
+* Bundles are no longer read from the Avian folder. You should have been prompted about moving them, if you had any. The reason we initially used the Avian folder was so that people could still use TextMate 1.x with bundles that did not rely on 2.0 features, so this move signals that we no longer think there is a reason to keep TextMate 1.x around. If you have a reason, please [let us know](https://macromates.com/support) (so that we can hopefully address it).
+* The `volumeSettings` user defaults key has been replaced with `disableExtendedAttributes` that can be set in `~/.tm_properties`. If you had disabled extended attributes for specific volumes, your settings should automatically appear in `~/Library/Application Support/TextMate/Global.tmProperties`.
+* See [all changes since v2.0-beta.12.21](https://github.com/textmate/textmate/compare/v2.0-beta.12.21...v2.0-beta.12.23)
+
+## 2016-10-03 (v2.0-beta.12.21)
+
+* Commands can be set to run again for certain events, for example both _HTML → Show Preview_ and _Markdown → Show Preview_ now update the preview on document changes. To enable this for a command you currently need to edit the property list for the `tmCommand` file and insert something like this:
+
+		<key>autoRefresh</key>
+		<array>
+			<string>DocumentChanged</string> <!-- Run whenever document is changed -->
+			<string>DocumentSaved</string>   <!-- Run if any document is saved     -->
+			<string>DocumentClosed</string>  <!-- Run when the document is closed  -->
+		</array>
+
+	When TextMate runs your command as a result of any of the above actions then the `TM_REFRESH` environment variable will be set to the event that triggered the execution.
+
+	If the command has HTML output then the HTML output view will be tied to the command/document, so closing the HTML output will stop running the command, and closing the document will cause the HTML output to also close (unless the command is only running on `DocumentSaved`, in this case, the HTML output will close when the window is closed, as the `DocumentSaved` event monitors saving of any document).
+
+	If the command does *not* have HTML output and its name matches `^(\w+) / (\w+) (.*)` then TextMate will show it as `$1 $3` by default and `$2 $3` when the command has been run, furthermore, if the user selects a command that has already been run, TextMate will stop running this command.
+
+	For example we could name our command “Enable / Disable Live Errors” and make it show a tool tip or gutter icon on each document change. The user will see it as “Enable Live Errors” unless it is already running, in which case it will be “Disable Live Errors”.
+
+* Format strings now support `${«var»:/titlecase}` as alias for `${«var»:/capitalize}`.
+* The find and replace text fields in the search dialog now have syntax highlight. By default they are using the Mac Classic theme but this can be changed using the `UIThemeUUID` defaults key. The grammars used for the fields are the _Regular Expressions (Oniguruma)_ and _Format String_ grammars from the TextMate bundle.
+* CoreText CTLine objects are now limited to about 2048 bytes of text which improve performance significantly for documents with extremely long lines but it may cause minor unicode incorrectness, mainly right-to-left text rendering would be affected, though officially right-to-left is still not fully supported by TextMate.
+* See [all changes since v2.0-beta.12.13](https://github.com/textmate/textmate/compare/v2.0-beta.12.13...v2.0-beta.12.21)
+
+## 2016-09-21 (v2.0-beta.12.13)
+
+* The search dialog now has a _“File Browser Items”_ in its pop-up. This refers to the selected items in the file browser, which can be files and folders (everything selected will be searched). If there is no selection, it will use the file browser’s location.
+* Speaking of file browser, searching _“Open Files”_ now also work after session restore (where previously non-loaded tabs would be skipped).
+* New `callback.document.did-change-scm-status` which is used by the SCM Gutter command to trigger after a commit/revert.
+* See [all changes since v2.0-beta.12.11](https://github.com/textmate/textmate/compare/v2.0-beta.12.11...v2.0-beta.12.13)
+
+## 2016-09-09 (v2.0-beta.12.11)
+
+* Minor tweaks and fixes incl. two recently introduced crash bugs.
+* See [all changes since v2.0-beta.12.8](https://github.com/textmate/textmate/compare/v2.0-beta.12.8...v2.0-beta.12.11)
+
+## 2016-08-30 (v2.0-beta.12.8)
+
+* The `callback.mouse-click` “semantic class” has been changed to `callback.single-click` and there is now also `callback.double-click` and `callback.triple-click`.
+* Add `callback.document.will/did-reload` which is triggered when the document is reloaded due to external changes. This is relevant for commands that update the gutter based on document content.
+* Add _Copy Replacements_ to the Find dialog’s action menu. After a regular expression search this can be used to copy all matches, but transformed by the replacement (format) string. For example search for `obj->(\w+)\(` and put `$1` in the _Replace_ field before selecting _Copy Replacements_ and you’ll get a list of just the member function name itself copied to the clipboard.
+
+* See [all changes since v2.0-beta.12.5](https://github.com/textmate/textmate/compare/v2.0-beta.12.5...v2.0-beta.12.8)
+
+## 2016-08-25 (v2.0-beta.12.5)
+
+* When duplicating files in the file browser, we now open the new file if the duplicated file was the selected tab.
+* Introduce `exit_insert_snippet_no_indent` to change a command’s output to a snippet but without adding indent.
+* It is now possible to use protocol-relative URLs (like `//apple.com`) in HTML output. By default we redirect these to `https` (even though they are technically loaded via the `file:` protocol). The default protocol can be changed via the `defaultURLProtocol` defaults key.
+* When setting `fontStyle` in a theme it is now possible to use `plain` with the other styles to reset all but the listed styles. E.g. `plain bold` to disable potential italic and underline.
+* A theme can now set `strikethrough` in `fontStyle` to get strikethrough text.
+* The `fontName` and `fontSize` settings in `.tm_properties` can now be set in a file type section to use different fonts for different file types or locations.
+* The search results font can be changed using the `searchResultsFontName` and `searchResultsFontSize` keys, e.g.:
+
+		defaults write com.macromates.TextMate.preview searchResultsFontName Menlo
+		defaults write com.macromates.TextMate.preview searchResultsFontSize -float 12
+
+* See [all changes since v2.0-beta.12.4](https://github.com/textmate/textmate/compare/v2.0-beta.12.4...v2.0-beta.12.5)
+
+## 2016-08-18 (v2.0-beta.12.4)
+
+I normally do not mention fixes in the release notes but since this is a regular release primarily meant to address some reported issues, I am making an exemption.
+
+* New: Projects with a `Package.swift` file now get the `attr.project.swift` scope. *[Ronald Wampler]*
+* Fixed: Use en-space instead of em-space for estimating how many columns fits the screen (relevant when soft wrapping text using a proportional width font).
+* Fixed: Specifying the same file multiple times via `mate` would cause an issue with the tab bar.
+* Fixed: If a font was specified in `.tm_properties` and wasn’t using the canonical name (e.g. spaces were inserted), TextMate would ignore it.
+* Fixed: Doing a folder search for a CR character would throw an exception if any file was CRLF delimited.
+* Fixed: Doing a folder search followed by Replace All would not do any replacements in inactive tabs.
+* Fixed: Using the indented line movement actions when there was a column selection would not split the column selection into multiple carets (one per line).
+* Fixed: Documents that caused the encoding dialog to show could cause TextMate to freeze.
+* Fixed: Commands with tool tip output would sometimes cause the insertion point to temporarily stop blinking.
+* See [all changes since v2.0-beta.12](https://github.com/textmate/textmate/compare/v2.0-beta.12...v2.0-beta.12.4)
+
+## 2016-08-08 (v2.0-beta.12)
+
+* Inserting type identifiable information on first line of a document will now change the document’s type to match. For example in a new plain text document you can use `py⇥`, `rb⇥`, `pl⇥`, `php⇥` or similar (at the top) to insert a “shebang” line, and now TextMate will update the document’s type to reflect it.
+
+* Copying multiple selections to the find clipboard (⌘E) will construct a regular expression that matches any of the items copied. For example if you select both “foo” and “bar” then using ⌘E will put `foo|bar` on the find clipboard.
+
+* Bundle items can now use `callback.document.did-open` as semantic class to run when a document is loaded (e.g. to set initial gutter marks).
+
+* Theme can now be changed per document type or folder by setting `theme` to the desired theme’s UUID in `.tm_properties` in the appropriate section, e.g. `[ *.md ]` or `[ build/** ]`.
+
+* You can change the font used for line numbers by setting `lineNumberFontName` via the `defaults` command. *[Mike Meyer]*
+
+* Only bundle items with ⌘ in their key equivalent will be executed when the window’s text view is not active.
+
+* When opening a file with unknown type we no longer present a sheet forcing you to select what type to use. Instead, if the type of the document can be handled by a remote bundle, we suggest installing this bundle using a non-modal dialog above your document. Here you can hold down option (⌥) to change the “Not Now” button to “Never”.
+
+* The “Add byte order mark” checkbox has been removed from the save panel and so has the `useBOM` setting. Instead byte order mark (BOM) is now part of the encoding name, so via the save panel you need to select “Unicode — UTF-8 (BOM)” to include a BOM or set `encoding = "UTF-8//BOM"` in `.tm_properties`. For UTF-16/32 you also need to append `//BOM` to the encoding name (if you set this via `.tm_properties`).
+
+* Monochrome gutter images should be suffixed with “Template” to be drawn as using the color of the current theme. Without this prefix, they are drawn as regular images.
+
+* `mate`: If the «mark» argument given to `--clear-mark` has a trailing slash then all marks with this prefix will be removed.
+
+* Normally paragraph selection, as implicitly used by actions like *Reformat Paragraph*, will select lines up/down until there is an empty line. You can now indicate that a line should be a paragraph break by setting the `excludeFromParagraphSelection` scoped setting to `true`. The Source bundle sets it to `true` for the `comment.line` scope so that one can run “paragraph actions” on text with comments above/below and no separating empty line. *[Adam Strzelecki]*
 
 * Folding indented blocks no longer include trailing empty lines.
-* Bundle items can now use `callback.document.did-open` as semantic class to run when a document is loaded (e.g. to set initial gutter marks).
-* Monochrome gutter images should be suffixed with “Template” to be drawn as using the color of the current theme. Without this prefix, they are drawn as regular images.
-* See [all changes since v2.0-beta.9.2](https://github.com/textmate/textmate/compare/v2.0-beta.9.2...v2.0-beta.9.3)
+
+* When we lookup settings for untitled documents we compare the file pattern of targeted settings to the project (or target) folder including a trailing slash, that way, a file created in `folder` will be targeted by a `folder/**` file pattern.
+
+* The precedence of targeted settings (`.tm_properties`) has been changed, probably easiest to explain with an example, as there are 3 different “types” of ways to target a document:
+
+		# .tm_properties
+		setting = «value» # 1. Untargeted
+		
+		[ text ]
+		setting = «value» # 2a. Scope selector match
+		
+		[ text.plain ]    # 2b. More specific scope selector match
+		setting = «value»
+		
+		[ *.txt ]
+		setting = «value» # 3. File type match
+
+	After the change, settings in the most local `.tm_properties` file will always take precedence over anything in a parent folder. So if you put: `tabSize = 4` in `/path/to/project` then **all** your project files will use a tab size of four (regardless of their type and more global settings). Within a `.tm_properties` file the settings are ranked in the order shown in the example above, i.e. a file type specific match will win over a scope selector match, and if there are multiple scope selectors, the one which is most specific will win, finally the untargeted settings will apply.
+
+	It is worth mentioning though that all settings are actually evaluated, this is mainly useful for variables, for example we can do:
+
+		# .tm_properties
+		Foo = "This is $Foo"
+		
+		[ text ]
+		Foo = "a text file"
+		
+		[ source ]
+		Foo = "source code"
+	
+	If you press ⌃R on a line containing `echo $foo` it should show either _“This is a text file”_ or _“This is source code”_.
+	
+	Hint: To see the value of all settings for your current document you can either press ⌃R on a line containing `"$TM_QUERY"` or you can use _Bundles → Select Bundle Item…_ (⌃⌘T) and switch to _Settings_ (⌘}). The latter will show how the settings are ordered.
+
+* Improve folder search performance for large documents with few newlines and lots of matches.
+
+* You can change the min/max width of tab items by using the `tabItemMinWidth` and `tabItemMaxWidth` user defaults keys. Default minimum width is 120 and maximum width is 250.
+
+	How to truncate the file names can also be set with `tabItemLineBreakStyle` which is an integer from [NSParagraphStyle.h](file:///Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.11.sdk/System/Library/Frameworks/AppKit.framework/Versions/C/Headers/NSParagraphStyle.h) which currently has the following options (default is `NSLineBreakByTruncatingMiddle`):
+
+	    NSLineBreakByWordWrapping     = 0 // Wrap at word boundaries
+	    NSLineBreakByCharWrapping     = 1 // Wrap at character boundaries
+	    NSLineBreakByClipping         = 2 // Simply clip
+	    NSLineBreakByTruncatingHead   = 3 // Truncate at head of line: "...wxyz"
+	    NSLineBreakByTruncatingTail   = 4 // Truncate at tail of line: "abcd..."
+	    NSLineBreakByTruncatingMiddle = 5 // Truncate middle of line:  "ab...yz"
+
+* The release version of the Emmet TextMate plug-in crashes on launch and has done so for years, so it is now blacklisted by default. There is a new version linked to from [this GitHub issue](https://github.com/emmetio/Emmet.tmplugin/issues/10) which does work. If you are using that version, you can clear TextMate’s blacklist by setting it to an empty array done by running this in a terminal:
+
+		defaults write com.macromates.TextMate.preview disabledPlugIns -array
+
+* If `git` or `svn` is found in `/usr/bin` then we check if Xcode is installed (by calling `/usr/bin/xcode-select -p`) and if not, we ignore the executable. This is because it is a shim that prompts the user to install Xcode, which has lead to some user confusion. Note though that we do not call `git` or `svn` unless we actually find a `.git` or `.svn` folder in your project.
+
+* See [all changes since v2.0-beta.9.2](https://github.com/textmate/textmate/compare/v2.0-beta.9.2...v2.0-beta.12)
 
 ## 2016-05-25 (v2.0-beta.9.2)
 

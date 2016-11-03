@@ -23,7 +23,7 @@ require 'set'
 require 'pp'
 
 GLOB_KEYS     = %w{ CP_Resources CP_SharedSupport CP_PlugIns CP_Library/QuickLook EXPORT HTML_FOOTER HTML_HEADER MARKDOWN_HEADER MARKDOWN_FOOTER PRELUDE SOURCES TARGETS TESTS TEST_SOURCES }
-STRING_KEYS   = %w{ TARGET_NAME BUNDLE_EXTENSION FLAGS C_FLAGS CXX_FLAGS OBJC_FLAGS OBJCXX_FLAGS LN_FLAGS PLIST_FLAGS BUILD }
+STRING_KEYS   = %w{ TARGET_NAME BUNDLE_EXTENSION FLAGS C_FLAGS CXX_FLAGS OBJC_FLAGS OBJCXX_FLAGS LN_FLAGS PLIST_FLAGS }
 
 COMPILER_INFO = {
   'c'  => { :rule => 'build_c',   :compiler => '$CC',  :flags => '$C_FLAGS',      },
@@ -48,7 +48,7 @@ class Targets
     targets.each do |target|
       next if target['SOURCES'].to_a.empty?
       @all << target
-      if target['EXPORT'] || linked.include?(target[:name]) || target['BUILD'] == 'lib'
+      if target['EXPORT'] || linked.include?(target[:name])
         target[:type] = :library
       else
         has_info_plist = target['CP_Resources'].to_a.find { |path| path =~ /\bInfo\.plist$/ }
@@ -182,12 +182,7 @@ end
 def pch_for(src, target)
   srcExt = source_type(src)
   target['PRELUDE'].each do |pch|
-    if srcExt == source_type(pch)
-      res = build_path(pch)
-      res << "-no-arc" if srcExt == 'm'  && target['OBJC_FLAGS'] =~ /-fno-objc-arc/
-      res << "-no-arc" if srcExt == 'mm' && target['OBJCXX_FLAGS'] =~ /-fno-objc-arc/
-      return res
-    end
+    return build_path(pch) if srcExt == source_type(pch)
   end
   abort "*** no pre-compiled header for #{src} (target: #{target[:name]})"
 end
@@ -308,12 +303,9 @@ def tests(target)
 
     res << "build #{dst}.run: run_test #{dst}\n"
     res << "build #{dst}.always-run: always_run_test #{dst}\n"
-    res << "build #{dst}.coerce: skip_test #{dst}\n"
-    res << "  seal = #{dst}.run\n"
 
     res << "build #{target[:name]}:        phony #{dst}.run\n"
     res << "build #{target[:name]}/test:   phony #{dst}.always-run\n"
-    res << "build #{target[:name]}/coerce: phony #{dst}.coerce\n"
 
     target[:test] = "#{dst}.run"
   end
@@ -708,7 +700,7 @@ open("#{builddir}/build.ninja", "w") do |io|
   end
   user_variables.sort! { |lhs, rhs| lhs[0] <=> rhs[0] }
 
-  tmp = variables.dup.concat(user_variables) 
+  tmp = variables.dup.concat(user_variables)
   width = tmp.map { |arr| arr[0].length }.max { |lhs, rhs| lhs <=> rhs }
 
   variables.each { |arr| io << format("%-#{width}s = %s\n", *arr) }
@@ -744,11 +736,6 @@ open("#{builddir}/build.ninja", "w") do |io|
 
     io << "build #{pch_for(src, TARGETS.root)}.gch: #{compiler_for(src)} #{src}\n"
     io << "  RAVE_FLAGS = #{type[ext]}\n\n"
-
-    if ext =~ /^mm?$/
-      io << "build #{pch_for(src, TARGETS.root)}-no-arc.gch: #{compiler_for(src)} #{src}\n"
-      io << "  RAVE_FLAGS = #{type[ext]} -fno-objc-arc\n\n"
-    end
   end
 
   # =======================================================
@@ -824,11 +811,11 @@ rule touch
   description = Touch ‘$out’…
 
 rule cp
-  command = cp -p $in $out
+  command = cp -XRp $in $out
   description = Copy ‘$in’…
 
 rule cp_as_utf16
-  command = if [[ $$(head -c2 $in) == $$'\xFF\xFE' || $$(head -c2 $in) == $$'\xFE\xFF' ]]; then cp -p $in $out; else iconv -f utf-8 -t utf-16 < $in > $out~ && mv $out~ $out; fi
+  command = if [[ $$(head -c2 $in) == $$'\xFF\xFE' || $$(head -c2 $in) == $$'\xFE\xFF' ]]; then cp -XRp $in $out; else iconv -f utf-8 -t utf-16 < $in > $out~ && mv $out~ $out; fi
   description = Copy ‘$in’ as UTF-16…
 
 rule ln
@@ -856,7 +843,7 @@ rule gen_oak_test
   description = Generate test ‘$out’…
 
 rule link_oak_test
-  command = $CXX -o $out $in $LN_FLAGS $RAVE_FLAGS
+  command = $CXX -o $out $in $LN_FLAGS $RAVE_FLAGS -framework CoreFoundation
   description = Link test ‘$out’…
 
 rule run_test
@@ -866,10 +853,6 @@ rule run_test
 rule always_run_test
   command = $in $test_flags
   description = Run test ‘$in’…
-
-rule skip_test
-  command = touch "$seal"
-  description = Skip test ‘$in’…
 
 rule link_static
   command = rm -f $out && ar -cqs $out $in
@@ -894,21 +877,21 @@ rule debug_executable
 
 rule run_application
   command = {                        $
-    if pgrep >/dev/null "$appname"; then $
-      if [[ -x "$$DIALOG" && $$("$$DIALOG" < /dev/null alert --title "Relaunch $appname?" --body "Would you like to quit $appname and start the newly built version?" --button1 Relaunch --button2 Cancel|pl) != *"buttonClicked = 0"* ]]; $
+    if pgrep "$appname"; then        $
+      if [[ -x "$$DIALOG" && $$("$$DIALOG" alert --title "Relaunch $appname?" --body "Would you like to quit $appname and start the newly built version?" --button1 Relaunch --button2 Cancel|pl) != *"buttonClicked = 0"* ]]; $
         then exit;                   $
       fi;                            $
       pkill "$appname";              $
-      while pgrep >/dev/null "$appname"; do $
+      while pgrep "$appname"; do     $
         if (( ++n == 10 )); then     $
-          test -x "$$DIALOG" && "$$DIALOG" </dev/null alert --title "Relaunch Timed Out" --body "Unable to exit $appname." --button1 OK; $
+          test -x "$$DIALOG" && "$$DIALOG" alert --title "Relaunch Timed Out" --body "Unable to exit $appname." --button1 OK; $
           exit;                      $
         fi;                          $
         sleep .2;                    $
       done;                          $
     fi;                              $
     open $in --args -disableSessionRestore NO; $
-  } &>/dev/null &
+  } </dev/null &>/dev/null &
   description = Run ‘$in’…
 
 rule sign_executable
@@ -916,12 +899,12 @@ rule sign_executable
   description = Sign ‘$in’…
 
 rule tbz_archive
-  command = tar $bzip2_flag -cf $out~ -C "$$(dirname $in)" "$$(basename $in)" && mv $out~ $out
+  command = COPYFILE_DISABLE=1 tar $bzip2_flag -cf $out~ -C "$$(dirname $in)" "$$(basename $in)" && mv $out~ $out
   generator = true
   description = Archive ‘$in’…
 
 rule upload
-  command = bin/upload -k$upload_keyfile -d$upload_destination -t'v$APP_VERSION' -m'{"version":"$APP_VERSION"}' $in > $out~ && mv $out~ $out
+  command = bin/upload -k$upload_keyfile -d$upload_destination -t'v$APP_VERSION' -m'{"version":"$APP_VERSION","depends":"os (>= $APP_MIN_OS), app (>= 2.0-alpha)"}' $in > $out~ && mv $out~ $out
   pool = console
   generator = true
   description = Upload ‘$in’…
@@ -951,7 +934,7 @@ rule dsym
   description = Archive dSYM info for ‘$in’…
 
 rule compile_xib
-  command = xcrun ibtool --errors --warnings --notices --output-format human-readable-text --compile $out $in
+  command = xcrun ibtool --errors --warnings --notices --output-format human-readable-text --minimum-deployment-target $APP_MIN_OS --compile $out $in
   description = Compile xib ‘$in’…
 
 rule process_plist

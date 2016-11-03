@@ -10,11 +10,12 @@ namespace ng
 
 	struct result_t
 	{
+		WATCH_LEAKS(parser::result_t);
 		parse::stack_ptr state;
 		std::map<size_t, scope::scope_t> scopes;
 	};
 
-	result_t handle_request (parse::grammar_ptr grammar, parse::stack_ptr state, std::string const& line, std::pair<size_t, size_t> range, size_t batch_start, size_t limit_redraw)
+	result_t handle_request (parse::grammar_ptr grammar, parse::stack_ptr state, std::string const& line, std::pair<size_t, size_t> range)
 	{
 		std::lock_guard<std::mutex> lock(grammar->mutex());
 
@@ -29,7 +30,7 @@ namespace ng
 
 	void buffer_t::initiate_repair (size_t limit_redraw, size_t batch_start)
 	{
-		if(!_async_parsing)
+		if(!_async_parsing || _parser_running)
 			return;
 
 		if(!_dirty.empty() && !_parser_states.empty())
@@ -50,17 +51,29 @@ namespace ng
 
 				size_t bufferRev = revision();
 				auto bufferRef   = parser_reference();
+				_parser_running  = true;
 
+				CFRunLoopRef runLoop = CFRunLoopGetCurrent();
 				dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-					result_t result = handle_request(grammarRef, state, line, { from, to }, batch_start, limit_redraw);
-					dispatch_async(dispatch_get_main_queue(), ^{
+					result_t result = handle_request(grammarRef, state, line, { from, to });
+					CFRunLoopPerformBlock(runLoop, kCFRunLoopCommonModes, ^{
 						if(bufferRef.lock())
 						{
+							_parser_running = false;
 							if(bufferRev == revision())
-									update_scopes(limit_redraw, batch_start, { from, to }, result.scopes, result.state);
-							else	initiate_repair();
+							{
+								update_scopes(limit_redraw, batch_start, { from, to }, result.scopes, result.state);
+							}
+							else
+							{
+								// We didn’t inform anyone about the previous lines parsed
+								if(batch_start != from)
+									did_parse(std::min(batch_start, size()), std::min(from, size()));
+								initiate_repair();
+							}
 						}
 					});
+					CFRunLoopWakeUp(runLoop);
 				});
 			}
 			else
@@ -70,7 +83,7 @@ namespace ng
 		}
 	}
 
-	void buffer_t::update_scopes (size_t limit_redraw, size_t const& batch_start, std::pair<size_t, size_t> const& range, std::map<size_t, scope::scope_t> const& newScopes, parse::stack_ptr parserState)
+	void buffer_t::update_scopes (size_t limit_redraw, size_t batch_start, std::pair<size_t, size_t> const& range, std::map<size_t, scope::scope_t> const& newScopes, parse::stack_ptr parserState)
 	{
 		bool atEOF = convert(range.first).line+1 == lines();
 		D(DBF_Buffer_Parsing, bug("did parse %zu-%zu (revision %zu), at EOL %s\n", range.first, range.second, revision(), BSTR(atEOF)););
@@ -83,18 +96,17 @@ namespace ng
 		}
 
 		_dirty.remove(_dirty.lower_bound(range.first), atEOF ? _dirty.end() : _dirty.lower_bound(range.second));
-		bool next_line_needs_update = false;
 		if((_parser_states.find(range.second) == _parser_states.end() || !parse::equal(parserState, (_parser_states.find(range.second)->second))))
 		{
 			_parser_states.set(range.second, parserState);
 			if(!atEOF)
-			{
-				next_line_needs_update = true;
 				_dirty.set(range.second, true);
-			}
 		}
 
 		_parser_reference.reset();
+		_parser_running = false;
+
+		bool next_line_needs_update = !_dirty.empty() && _dirty.begin()->first == range.second;
 		if(!next_line_needs_update || limit_redraw == 0)
 		{
 			did_parse(batch_start, range.second);
@@ -112,6 +124,8 @@ namespace ng
 			return;
 
 		_parser_reference.reset();
+		_parser_running = false;
+
 		std::lock_guard<std::mutex> lock(grammar()->mutex());
 		while(!_dirty.empty() && !_parser_states.empty())
 		{

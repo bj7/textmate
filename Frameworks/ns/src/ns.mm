@@ -1,24 +1,37 @@
 #import "ns.h"
+#import <OakFoundation/NSString Additions.h>
 #import <oak/oak.h>
 #import <oak/debug.h>
 #import <text/utf8.h>
 
 OAK_DEBUG_VAR(NSEvent);
 
+NSString* to_ns (std::string const& str)
+{
+	return [NSString stringWithCxxString:str];
+}
+
 std::string to_s (NSString* aString)
 {
 	if(!aString)
 		return NULL_STR;
 
-	NSData* data = [aString dataUsingEncoding:NSUTF8StringEncoding];
-	std::string res([data length], ' ');
-	memcpy(&res[0], [data bytes], [data length]);
+	CFRange range = CFRangeMake(0, CFStringGetLength((CFStringRef)aString));
+	CFIndex byteCount;
+	CFStringGetBytes((CFStringRef)aString, range, kCFStringEncodingUTF8, 0, false, NULL, 0, &byteCount);
+	std::string res(byteCount, '\0');
+	CFStringGetBytes((CFStringRef)aString, range, kCFStringEncodingUTF8, 0, false, (UInt8*)&res[0], byteCount, NULL);
 	return res;
 }
 
 std::string to_s (NSAttributedString* anAttributedString)
 {
 	return to_s([anAttributedString string]);
+}
+
+std::string to_s (NSUUID* identifier)
+{
+	return to_s(identifier.UUIDString);
 }
 
 std::string to_s (NSData* someData)

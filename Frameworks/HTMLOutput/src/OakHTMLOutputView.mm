@@ -2,24 +2,39 @@
 #import "browser/HOStatusBar.h"
 #import "helpers/HOAutoScroll.h"
 #import "helpers/HOJSBridge.h"
+#import <OakFoundation/OakFoundation.h>
 #import <OakFoundation/NSString Additions.h>
+#import <OakAppKit/OakAppKit.h>
 #import <oak/debug.h>
 
-extern NSString* const kCommandRunnerURLScheme; // from HTMLOutput.h
+@interface HOStatusBar (BusyAndProgressProperties) <HOJSBridgeDelegate>
+@end
 
 @interface OakHTMLOutputView ()
 {
 	OBJC_WATCH_LEAKS(OakHTMLOutputView);
 }
-@property (nonatomic) BOOL runningCommand;
+@property (nonatomic, getter = isRunningCommand, readwrite) BOOL runningCommand;
 @property (nonatomic) HOAutoScroll* autoScrollHelper;
 @property (nonatomic) std::map<std::string, std::string> environment;
 @property (nonatomic) NSRect pendingVisibleRect;
+@property (nonatomic, getter = isVisible) BOOL visible;
 @end
 
 @implementation OakHTMLOutputView
++ (NSSet*)keyPathsForValuesAffectingMainFrameTitle
+{
+	return [NSSet setWithObjects:@"webView.mainFrameTitle", nil];
+}
 
-@dynamic webView, needsNewWebView;
+- (instancetype)initWithFrame:(NSRect)aRect
+{
+	if(self = [super initWithFrame:aRect])
+	{
+		_reusable = YES;
+	}
+	return self;
+}
 
 - (void)loadRequest:(NSURLRequest*)aRequest environment:(std::map<std::string, std::string> const&)anEnvironment autoScrolls:(BOOL)flag
 {
@@ -30,19 +45,85 @@ extern NSString* const kCommandRunnerURLScheme; // from HTMLOutput.h
 	}
 
 	self.environment = anEnvironment;
-	self.runningCommand = [[[aRequest URL] scheme] isEqualToString:kCommandRunnerURLScheme];
+	self.commandIdentifier = [NSURLProtocol propertyForKey:@"commandIdentifier" inRequest:aRequest];
+	self.runningCommand = self.commandIdentifier != nil;
+
+	[self willChangeValueForKey:@"mainFrameTitle"];
 	[self.webView.mainFrame loadRequest:aRequest];
+	[self didChangeValueForKey:@"mainFrameTitle"];
 }
 
-- (void)stopLoading
+- (void)stopLoadingWithUserInteraction:(BOOL)askUserFlag completionHandler:(void(^)(BOOL didStop))handler
 {
-	[self.webView.mainFrame stopLoading];
+	NSURLRequest* request = self.webView.mainFrame.dataSource.initialRequest;
+	if(id command = [NSURLProtocol propertyForKey:@"command" inRequest:request])
+	{
+		NSAlert* alert = askUserFlag ? [NSAlert alertWithMessageText:[NSString stringWithFormat:@"Stop “%@”?", [NSURLProtocol propertyForKey:@"processName" inRequest:request]] defaultButton:@"Stop" alternateButton:@"Cancel" otherButton:nil informativeTextWithFormat:@"The job that the task is performing will not be completed."] : nil;
+
+		__weak __block id observerId = [[NSNotificationCenter defaultCenter] addObserverForName:@"OakCommandDidTerminateNotification" object:command queue:nil usingBlock:^(NSNotification* notification){
+			if(alert)
+			{
+				if([self.window respondsToSelector:@selector(endSheet:returnCode:)]) // MAC_OS_X_VERSION_10_9
+						[self.window endSheet:alert.window returnCode:NSAlertDefaultReturn];
+				else	[NSApp endSheet:alert.window returnCode:NSAlertDefaultReturn];
+			}
+			handler(YES);
+			[[NSNotificationCenter defaultCenter] removeObserver:observerId];
+		}];
+
+		if(alert)
+		{
+			OakShowAlertForWindow(alert, self.window, ^(NSInteger returnCode){
+				if(returnCode == NSAlertDefaultReturn) /* "Stop" */
+				{
+					[self.webView.mainFrame stopLoading];
+				}
+				else
+				{
+					handler(NO);
+					[[NSNotificationCenter defaultCenter] removeObserver:observerId];
+				}
+			});
+		}
+		else
+		{
+			[self.webView.mainFrame stopLoading];
+		}
+	}
+	else
+	{
+		handler(YES);
+	}
 }
 
-- (void)loadHTMLString:(NSString*)someHTML
+- (void)setContent:(NSString*)someHTML
 {
 	self.pendingVisibleRect = [[[[self.webView mainFrame] frameView] documentView] visibleRect];
 	[[self.webView mainFrame] loadHTMLString:someHTML baseURL:[NSURL fileURLWithPath:NSHomeDirectory()]];
+}
+
+- (NSString*)mainFrameTitle
+{
+	if(OakIsEmptyString(self.webView.mainFrameTitle))
+	{
+		WebFrame* frame = self.webView.mainFrame;
+		if(NSURLRequest* request = (frame.provisionalDataSource ?: frame.dataSource).initialRequest)
+			return [NSURLProtocol propertyForKey:@"processName" inRequest:request] ?: @"";
+	}
+	return self.webView.mainFrameTitle;
+}
+
+- (void)viewDidMoveToWindow
+{
+	[[NSNotificationCenter defaultCenter] removeObserver:self name:NSWindowWillCloseNotification object:nil];
+	if(self.window)
+		[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(windowWillClose:) name:NSWindowWillCloseNotification object:self.window];
+	self.visible = self.window ? YES : NO;
+}
+
+- (void)windowWillClose:(NSNotification*)aNotification
+{
+	self.visible = NO;
 }
 
 // =======================
@@ -51,15 +132,14 @@ extern NSString* const kCommandRunnerURLScheme; // from HTMLOutput.h
 
 - (void)webView:(WebView*)sender didStartProvisionalLoadForFrame:(WebFrame*)frame
 {
-	self.statusBar.isBusy = YES;
-	if(NSString* scheme = [[[[[self.webView mainFrame] provisionalDataSource] request] URL] scheme])
-		[self setUpdatesProgress:![scheme isEqualToString:kCommandRunnerURLScheme]];
+	self.statusBar.busy = YES;
+	[self setUpdatesProgress:!self.isRunningCommand];
 }
 
 - (void)webView:(WebView*)sender didClearWindowObject:(WebScriptObject*)windowScriptObject forFrame:(WebFrame*)frame
 {
 	NSString* scheme = [[[[[self.webView mainFrame] dataSource] request] URL] scheme];
-	if([@[ kCommandRunnerURLScheme, @"tm-file", @"file" ] containsObject:scheme])
+	if(self.isRunningCommand || [@[ @"tm-file", @"file" ] containsObject:scheme])
 	{
 		HOJSBridge* bridge = [HOJSBridge new];
 		[bridge setDelegate:self.statusBar];

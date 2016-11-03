@@ -46,8 +46,8 @@ static void launch_control (char const* command, std::string const& argument)
 	pid_t pid = vfork();
 	if(pid == 0)
 	{
-		execl("/bin/launchctl", "/bin/launchctl", command, argument.c_str(), NULL);
-		perror("/bin/launchctl failed");
+		execl("/bin/launchctl", "/bin/launchctl", command, argument.c_str(), nullptr);
+		perror("execl(\"/bin/launchctl\")");
 		_exit(EXIT_FAILURE);
 	}
 
@@ -58,7 +58,7 @@ static void launch_control (char const* command, std::string const& argument)
 static void remove_policy ()
 {
 	AuthorizationRef authRef;
-	if(noErr == AuthorizationCreate(NULL, kAuthorizationEmptyEnvironment, kAuthorizationFlagDefaults, &authRef))
+	if(noErr == AuthorizationCreate(nullptr, kAuthorizationEmptyEnvironment, kAuthorizationFlagDefaults, &authRef))
 	{
 		AuthorizationRightRemove(authRef, kAuthRightName);
 		AuthorizationFree(authRef, kAuthorizationFlagDefaults);
@@ -70,7 +70,7 @@ static void add_policy ()
 	remove_policy();
 
 	AuthorizationRef authRef;
-	if(noErr == AuthorizationCreate(NULL, kAuthorizationEmptyEnvironment, kAuthorizationFlagDefaults, &authRef))
+	if(noErr == AuthorizationCreate(nullptr, kAuthorizationEmptyEnvironment, kAuthorizationFlagDefaults, &authRef))
 	{
 		cf::dictionary rightDefinition;
 		rightDefinition["class"]      = cf::string("user");
@@ -78,7 +78,7 @@ static void add_policy ()
 		rightDefinition["allow-root"] = CFRetain(kCFBooleanTrue);
 		rightDefinition["timeout"]    = cf::number(900);
 
-		int errStatus = AuthorizationRightSet(authRef, kAuthRightName, rightDefinition, NULL /* description key */, NULL, NULL);
+		int errStatus = AuthorizationRightSet(authRef, kAuthRightName, rightDefinition, nullptr /* description key */, nullptr, nullptr);
 		if(errStatus != noErr)
 			fprintf(stderr, "*** error adding policy (‘%s’): %d\n", kAuthRightName, errStatus);
 
@@ -102,7 +102,7 @@ int install_tool (std::string const& toolPath)
 	path::remove(kAuthToolPath);
 	if(!path::copy(toolPath, kAuthToolPath))
 		return EX_IOERR;
-   chown(kAuthToolPath, 0, 0);
+	chown(kAuthToolPath, 0, 0);
 	if(path::exists(kAuthPlistPath))
 		launch_control("unload", kAuthPlistPath);
 	if(!path::set_content(kAuthPlistPath, plist_content()))

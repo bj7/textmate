@@ -2,7 +2,6 @@
 #include "download.h"
 #include <io/path.h>
 #include <io/move_path.h>
-#include <io/swap_file_data.h>
 #include <io/entries.h>
 #include <network/download_tbz.h>
 #include <plist/ascii.h>
@@ -66,7 +65,7 @@ namespace bundles_db
 
 	std::vector<source_ptr> sources (std::string const& installDir)
 	{
-		// Cleanup legacy files
+		// LEGACY files used prior to 2.0-alpha.9555
 		unlink(path::join(path::home(), "Library/Application Support/TextMate/Managed/KeyChain.plist").c_str());
 		unlink(path::join(sources_base_path(installDir), "Sources.plist").c_str());
 
@@ -79,9 +78,8 @@ namespace bundles_db
 		std::string path = download_etag(source->url(), source->key_chain(), &etag, progress, min, max);
 		if(path != NULL_STR)
 		{
-			if(path::swap_and_unlink(path, source->path()))
-					path::set_attr(source->path(), "org.w3.http.etag", etag);
-			else	fprintf(stderr, "*** swap_and_unlink(‘%s’ → ‘%s’): %s\n", path.c_str(), source->path().c_str(), strerror(errno));
+			path::set_attr(path, "org.w3.http.etag", etag);
+			path::rename_or_copy(path, source->path());
 		}
 		else if(etag == NULL_STR)
 		{
@@ -461,13 +459,13 @@ namespace bundles_db
 			if(path::exists(dst))
 			{
 				char date[64];
-				time_t now = time(NULL);
+				time_t now = time(nullptr);
 				strftime(date, sizeof(date), "(%F %T)", localtime(&now));
 				trash = dst + ".updating." + date;
 
 				if(rename(dst.c_str(), trash.c_str()) != 0)
 				{
-					fprintf(stderr, "unable to rename old bundle ‘%s’ → ‘%s’: %s\n", dst.c_str(), trash.c_str(), strerror(errno));
+					perrorf("bundles_db: rename(\"%s\", \"%s\")", dst.c_str(), trash.c_str());
 					return false;
 				}
 			}

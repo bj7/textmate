@@ -46,7 +46,8 @@ static NSPopUpButton* OakCreateFolderPopUpButton ()
 		NSMutableParagraphStyle* parStyle = [NSMutableParagraphStyle new];
 		[parStyle setLineBreakMode:NSLineBreakByTruncatingMiddle];
 
-		if([[NSProcessInfo processInfo] respondsToSelector:@selector(isOperatingSystemAtLeastVersion:)] && [[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion:{ 10, 10, 0 }])
+		// MAC_OS_X_VERSION_10_10
+		if([NSProcessInfo instancesRespondToSelector:@selector(isOperatingSystemAtLeastVersion:)] && [[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion:{ 10, 10, 0 }])
 		{
 			NSFont* font = [NSFont systemFontOfSize:12];
 

@@ -8,12 +8,98 @@
 #import <OakAppKit/NSImage Additions.h>
 #import <OakAppKit/OakAppKit.h>
 #import <OakAppKit/OakUIConstructionFunctions.h>
-#import <OakAppKit/OakRolloverButton.h>
-#import <OakAppKit/OakFileIconImage.h>
 #import <ns/ns.h>
 #import <io/path.h>
 #import <text/utf8.h>
 #import <oak/oak.h>
+
+@interface FSItemWrapper : NSObject <NSCopying>
+@property (nonatomic) NSString* displayName;
+@property (nonatomic) NSString* editingName;
+@end
+
+@implementation FSItemWrapper
+- (id)initWithDisplayName:(NSString*)display editingName:(NSString*)editing
+{
+	if((self = [super init]))
+	{
+		_displayName = display;
+		_editingName = editing;
+	}
+	return self;
+}
+
+- (id)copyWithZone:(NSZone*)aZone { return [[FSItemWrapper alloc] initWithDisplayName:_displayName editingName:_editingName]; }
+- (NSUInteger)hash                { return [_editingName hash]; }
+- (BOOL)isEqual:(id)otherObject   { return [otherObject isKindOfClass:[self class]] && [_editingName isEqual:[otherObject editingName]] && [_displayName isEqual:[otherObject displayName]]; }
+- (NSString*)description          { return [NSString stringWithFormat:@"<%@: %@ (%@)>", self.class, _displayName, _editingName]; }
+@end
+
+@interface FSItem (FSItemWrapper)
+- (FSItemWrapper*)wrappedValue;
+@end
+
+@implementation FSItem (FSItemWrapper)
++ (NSSet*)keyPathsForValuesAffectingWrappedValue
+{
+	return [NSSet setWithObjects:@"displayName", @"url", nil];
+}
+
+- (FSItemWrapper*)wrappedValue
+{
+	NSString* editingName = [[self.url.path lastPathComponent] stringByReplacingOccurrencesOfString:@":" withString:@"/"];
+	return [[FSItemWrapper alloc] initWithDisplayName:self.displayName editingName:editingName];
+}
+
+- (void)setWrappedValue:(FSItemWrapper*)wrappedValue
+{
+	// Because ‘wrappedValue’ is bound to our text field then we receive updates when user edtis the text field
+}
+@end
+
+@interface FSItemFormatter : NSFormatter
+@property (nonatomic) FSItemWrapper* originalValue;
+@end
+
+@implementation FSItemFormatter
+- (NSString*)stringForObjectValue:(id)aValue
+{
+	// If the table view is set to render as source list
+	// then we may receive an attributed string as value
+
+	if([aValue isKindOfClass:[FSItemWrapper class]])
+		return ((FSItemWrapper*)aValue).displayName;
+	else if([aValue isKindOfClass:[NSString class]])
+		return aValue;
+	else if([aValue isKindOfClass:[NSAttributedString class]])
+		return ((NSAttributedString*)aValue).string;
+	return [NSString stringWithFormat:@"Unexpected value type: %@", [aValue class]];
+}
+
+- (NSString*)editingStringForObjectValue:(id)aValue
+{
+	if([aValue isKindOfClass:[FSItemWrapper class]])
+	{
+		_originalValue = [aValue copy];
+		return _originalValue.editingName;
+	}
+	return [super editingStringForObjectValue:aValue];
+}
+
+- (BOOL)getObjectValue:(id*)valueRef forString:(NSString*)aString errorDescription:(NSString**)errorRef
+{
+	if(_originalValue) // This is nil when rendering as source list
+	{
+		_originalValue.editingName = [aString copy];
+		*valueRef = _originalValue;
+	}
+	else
+	{
+		*valueRef = aString;
+	}
+	return YES;
+}
+@end
 
 @interface OakSelectBasenameCell : NSTextFieldCell
 @end
@@ -84,7 +170,7 @@
 @property (nonatomic, weak) id target;
 
 @property (nonatomic) OakLabelSwatchView* labelSwatchView;
-@property (nonatomic) OakRolloverButton* closeButton;
+@property (nonatomic) NSButton* closeButton;
 @property (nonatomic) NSMutableArray* myConstraints;
 @end
 
@@ -180,13 +266,10 @@
 	}
 	else if(!_closeButton)
 	{
-		_closeButton = [[OakRolloverButton alloc] initWithFrame:NSZeroRect];
-		_closeButton.regularImage  = [NSImage imageNamed:@"CloseTemplate"         inSameBundleAsClass:[self class]];
-		_closeButton.pressedImage  = [NSImage imageNamed:@"ClosePressedTemplate"  inSameBundleAsClass:[self class]];
-		_closeButton.rolloverImage = [NSImage imageNamed:@"CloseRolloverTemplate" inSameBundleAsClass:[self class]];
-		_closeButton.target        = _target;
-		_closeButton.action        = _closeAction;
-		OakSetAccessibilityLabel(_closeButton, @"Close document");
+		_closeButton = OakCreateCloseButton();
+		_closeButton.refusesFirstResponder = YES;
+		_closeButton.target = _target;
+		_closeButton.action = _closeAction;
 
 		OakAddAutoLayoutViewsToSuperview(@[ _closeButton ], self);
 	}
@@ -225,6 +308,7 @@
 		[fileTextField.cell setLineBreakMode:NSLineBreakByTruncatingMiddle];
 		fileTextField.editable = YES;
 		fileTextField.delegate = self;
+		fileTextField.formatter = [[FSItemFormatter alloc] init];
 
 		NSDictionary* views = @{ @"icon" : _openButton, @"file" : fileTextField, @"itemInfoButtons" : _itemInfoButtons };
 		OakAddAutoLayoutViewsToSuperview([views allValues], self);
@@ -235,7 +319,7 @@
 		[self addConstraint:[NSLayoutConstraint constraintWithItem:self attribute:NSLayoutAttributeCenterY relatedBy:NSLayoutRelationEqual toItem:_openButton attribute:NSLayoutAttributeCenterY multiplier:1 constant:0]];
 
 		[_openButton bind:NSImageBinding toObject:self withKeyPath:@"objectValue.icon" options:nil];
-		[fileTextField bind:NSValueBinding toObject:self withKeyPath:@"objectValue.displayName" options:nil];
+		[fileTextField bind:NSValueBinding toObject:self withKeyPath:@"objectValue.wrappedValue" options:nil];
 		[fileTextField bind:NSToolTipBinding toObject:self withKeyPath:@"objectValue.toolTip" options:nil];
 		[_itemInfoButtons bind:@"labelIndex" toObject:self withKeyPath:@"objectValue.labelIndex" options:nil];
 		[_itemInfoButtons bind:@"open" toObject:self withKeyPath:@"objectValue.open" options:nil];
@@ -256,9 +340,16 @@
 
 - (void)controlTextDidEndEditing:(NSNotification*)aNotification
 {
-	FSItem* item = self.objectValue;
-	if(![item setNewDisplayName:self.textField.stringValue view:self.enclosingScrollView.documentView ?: self])
-		item.displayName = [NSString stringWithCxxString:path::display_name([item.url.path fileSystemRepresentation])];
+	NSString* newName = self.textField.stringValue;
+	if([self.textField.objectValue isKindOfClass:[FSItemWrapper class]])
+		newName = ((FSItemWrapper*)self.textField.objectValue).editingName;
+
+	FSItem* item = (FSItem*)self.objectValue;
+	if(OakNotEmptyString(newName))
+		[item renameToName:newName view:self.enclosingScrollView.documentView ?: self];
+
+	// Update NSTextField’s objectValue to new name
+	item.wrappedValue = item.wrappedValue;
 }
 
 - (void)resetCursorRects
@@ -336,7 +427,7 @@ struct expansion_state_t
 {
 	if((self = [super init]))
 	{
-		_expandedURLs = ConvertStringArrayToURLSet([[NSUserDefaults standardUserDefaults] arrayForKey:@"ExpandedURLs"]);
+		_expandedURLs = ConvertStringArrayToURLSet([[NSUserDefaults standardUserDefaults] stringArrayForKey:@"ExpandedURLs"]);
 		_selectedURLs = [NSMutableSet new];
 
 		[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(applicationWillTerminate:) name:NSApplicationWillTerminateNotification object:NSApp];
@@ -357,7 +448,7 @@ struct expansion_state_t
 	static BOOL mergeWithUserDefaults = NO;
 	[_expandedURLs intersectSet:VisibleURLs(_outlineView, _dataSource.rootItem)];
 	if(mergeWithUserDefaults)
-		[_expandedURLs unionSet:ConvertStringArrayToURLSet([[NSUserDefaults standardUserDefaults] arrayForKey:@"ExpandedURLs"])];
+		[_expandedURLs unionSet:ConvertStringArrayToURLSet([[NSUserDefaults standardUserDefaults] stringArrayForKey:@"ExpandedURLs"])];
 	[[NSUserDefaults standardUserDefaults] setObject:ConvertURLSetToStringArray(_expandedURLs) forKey:@"ExpandedURLs"];
 	mergeWithUserDefaults = YES;
 }

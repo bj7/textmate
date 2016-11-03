@@ -7,6 +7,7 @@
 #import <OakFoundation/NSString Additions.h>
 #import <bundles/bundles.h>
 #import <text/ctype.h>
+#import <ns/ns.h>
 
 static NSTextField* OakCreateTextField (NSString* label)
 {
@@ -57,11 +58,6 @@ static NSMenuItem* OakCreateIndentMenuItem (NSString* title, SEL action, id targ
 @end
 
 @implementation OTVStatusBar
-+ (BOOL)requiresConstraintBasedLayout
-{
-	return YES;
-}
-
 - (id)initWithFrame:(NSRect)aRect
 {
 	if(self = [super initWithFrame:aRect])
@@ -269,6 +265,16 @@ static NSMenuItem* OakCreateIndentMenuItem (NSString* title, SEL action, id targ
 	[self.symbolPopUp addItemWithTitle:newSymbolName ?: @"Symbols"];
 }
 
+- (void)setFileType:(NSString*)newFileType
+{
+	if(_fileType == newFileType)
+		return;
+
+	_fileType = newFileType;
+	for(auto const& item : bundles::query(bundles::kFieldGrammarScope, to_s(newFileType)))
+		self.grammarName = [NSString stringWithCxxString:item->name()];
+}
+
 - (void)setRecordingTimer:(NSTimer*)aTimer
 {
 	if(_recordingTimer != aTimer)
@@ -278,10 +284,10 @@ static NSMenuItem* OakCreateIndentMenuItem (NSString* title, SEL action, id targ
 	}
 }
 
-- (void)setIsMacroRecording:(BOOL)flag
+- (void)setRecordingMacro:(BOOL)flag
 {
-	_isMacroRecording = flag;
-	if(_isMacroRecording)
+	_recordingMacro = flag;
+	if(_recordingMacro)
 	{
 		self.recordingTimer = [NSTimer scheduledTimerWithTimeInterval:0.02 target:self selector:@selector(updateMacroRecordingAnimation:) userInfo:nil repeats:YES];
 	}
@@ -295,10 +301,10 @@ static NSMenuItem* OakCreateIndentMenuItem (NSString* title, SEL action, id targ
 
 - (void)updateTabSettings
 {
-	self.tabSizePopUp.title = [NSString stringWithFormat:@"%@:\u2003%d", _softTabs ? @"Soft Tabs" : @"Tab Size", _tabSize];
+	self.tabSizePopUp.title = [NSString stringWithFormat:@"%@:\u2003%lu", _softTabs ? @"Soft Tabs" : @"Tab Size", _tabSize];
 }
 
-- (void)setTabSize:(int32_t)size
+- (void)setTabSize:(NSUInteger)size
 {
 	_tabSize = size;
 	[self updateTabSettings];

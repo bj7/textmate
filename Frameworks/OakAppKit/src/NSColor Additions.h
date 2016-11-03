@@ -1,5 +1,7 @@
 @interface NSColor (TMColorAdditions)
 + (NSColor*)colorWithString:(NSString*)aString;
-+ (NSColor*)tmColorWithCGColor:(CGColorRef)aColor;
-- (CGColorRef)tmCGColor;
++ (NSColor*)tmMatchedTextBackgroundColor;
++ (NSColor*)tmMatchedTextUnderlineColor;
++ (NSColor*)tmMatchedTextSelectedBackgroundColor;
++ (NSColor*)tmMatchedTextSelectedUnderlineColor;
 @end

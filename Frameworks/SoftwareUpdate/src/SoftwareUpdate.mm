@@ -46,8 +46,6 @@ typedef std::shared_ptr<shared_state_t> shared_state_ptr;
 - (void)checkVersionAtURL:(NSURL*)anURL inBackground:(BOOL)backgroundFlag allowRedownload:(BOOL)redownloadFlag;
 @end
 
-static SoftwareUpdate* SharedInstance;
-
 @implementation SoftwareUpdate
 {
 	key_chain_t keyChain;
@@ -57,9 +55,10 @@ static SoftwareUpdate* SharedInstance;
 	CGFloat secondsLeft;
 }
 
-+ (SoftwareUpdate*)sharedInstance
++ (instancetype)sharedInstance
 {
-	return SharedInstance ?: [self new];
+	static SoftwareUpdate* sharedInstance = [self new];
+	return sharedInstance;
 }
 
 + (void)initialize
@@ -71,10 +70,7 @@ static SoftwareUpdate* SharedInstance;
 
 - (id)init
 {
-	if(SharedInstance)
-	{
-	}
-	else if(self = SharedInstance = [super init])
+	if(self = [super init])
 	{
 		D(DBF_SoftwareUpdate_Check, bug("\n"););
 		pollInterval = 60*60;
@@ -82,7 +78,7 @@ static SoftwareUpdate* SharedInstance;
 		[[[NSWorkspace sharedWorkspace] notificationCenter] addObserver:self selector:@selector(scheduleVersionCheck:) name:NSWorkspaceDidWakeNotification object:[NSWorkspace sharedWorkspace]];
 		[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(userDefaultsDidChange:) name:NSUserDefaultsDidChangeNotification object:[NSUserDefaults standardUserDefaults]];
 	}
-	return SharedInstance;
+	return self;
 }
 
 - (void)scheduleVersionCheck:(id)sender
@@ -93,7 +89,7 @@ static SoftwareUpdate* SharedInstance;
 
 	struct statfs sfsb;
 	BOOL readOnlyFileSystem = statfs(oak::application_t::path().c_str(), &sfsb) != 0 || (sfsb.f_flags & MNT_RDONLY);
-	BOOL disablePolling = [[[NSUserDefaults standardUserDefaults] objectForKey:kUserDefaultsDisableSoftwareUpdatesKey] boolValue];
+	BOOL disablePolling = [[NSUserDefaults standardUserDefaults] boolForKey:kUserDefaultsDisableSoftwareUpdatesKey];
 	D(DBF_SoftwareUpdate_Check, bug("download visible %s, disable polling %s, read only file system %s → %s\n", BSTR(self.downloadWindow), BSTR(disablePolling), BSTR(readOnlyFileSystem), BSTR(!self.downloadWindow && !disablePolling && !readOnlyFileSystem)););
 	if(_downloadWindow.isWorking || disablePolling || readOnlyFileSystem)
 		return;
@@ -121,7 +117,7 @@ static SoftwareUpdate* SharedInstance;
 	if(_downloadWindow.isWorking)
 		return;
 
-	NSURL* url = [self.channels objectForKey:[[NSUserDefaults standardUserDefaults] objectForKey:kUserDefaultsSoftwareUpdateChannelKey]];
+	NSURL* url = [self.channels objectForKey:[[NSUserDefaults standardUserDefaults] stringForKey:kUserDefaultsSoftwareUpdateChannelKey]];
 	[self checkVersionAtURL:url inBackground:YES allowRedownload:NO];
 }
 
@@ -130,7 +126,7 @@ static SoftwareUpdate* SharedInstance;
 	D(DBF_SoftwareUpdate_Check, bug("\n"););
 
 	BOOL isShiftDown = OakIsAlternateKeyOrMouseEvent(NSShiftKeyMask);
-	NSURL* url = [self.channels objectForKey:OakIsAlternateKeyOrMouseEvent(NSAlternateKeyMask) ? kSoftwareUpdateChannelNightly : [[NSUserDefaults standardUserDefaults] objectForKey:kUserDefaultsSoftwareUpdateChannelKey]];
+	NSURL* url = [self.channels objectForKey:OakIsAlternateKeyOrMouseEvent(NSAlternateKeyMask) ? kSoftwareUpdateChannelNightly : [[NSUserDefaults standardUserDefaults] stringForKey:kUserDefaultsSoftwareUpdateChannelKey]];
 	[self checkVersionAtURL:url inBackground:NO allowRedownload:isShiftDown];
 }
 
