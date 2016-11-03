@@ -5,3 +5,10 @@ Applications/TextMate/resources/DefaultBundles.tbz
 Frameworks/license/src/revoked_serials.cc
 *.capnp.c++
 *.capnp.h
+/.DS_Store
+/Applications/.DS_Store
+/bin/.DS_Store
+/Frameworks/.DS_Store
+/PlugIns/.DS_Store
+/Shared/.DS_Store
+/vendor/.DS_Store
